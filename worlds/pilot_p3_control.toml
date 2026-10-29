@@ -1,0 +1,76 @@
+# Pilot P3 control (M8.5): the same world as pilot_p3 (same seed, same isolated valleys),
+# rules only: what the valleys become without the LLM, to compare with pilot_p3.
+#
+#   genesis new --config worlds/pilot_p3_control.toml
+#   genesis start pilot_p3_control --years 100
+#   genesis check pilot_p3_control
+
+[world]
+name = "pilot_p3_control"
+seed = 23
+width = 80
+height = 60
+default_terrain = "plains"
+generate = "valleys"
+valleys = 2
+passes = false
+
+[population]
+founders = 14
+names = ["Asha", "Bren", "Caro", "Dain", "Elsa", "Fenn", "Gaia", "Hux", "Iris", "Jory",
+         "Kesa", "Lune", "Mott", "Nira", "Odo", "Pell", "Quin", "Rue", "Sela", "Tavi"]
+
+[time]
+ticks_per_day = 4       # watches
+days_per_year = 360
+start_hour = 6          # the first watch is dawn
+seasons = true
+save_every_ticks = 4    # save once a simulated day (a crash loses at most a day; resume is exact)
+
+[rules]
+max_population = 50             # living plus unborn: the land "fills up" at 50
+disasters = 1                   # M8e: one every 15-25 years (seeded), one valley or all
+crowd_per_valley = 20           # more than this in a valley pushes people to look further
+explore_leash = 1               # explore only as far as they can safely get back from
+foraging_practice = 0.25        # M8f: meals teach foraging slowly, so talents can show
+currency_after_days = 360       # M8f: no money in the first year of trading ...
+currency_min_indirect = 20      # ... and only when many trades are made to pass a good on
+currency_min_users = 5
+# Lives in years (all durations are in days).
+adult_age_days = 5400           # 15 years
+lifespan_base_days = 16200      # 45 years ...
+lifespan_longevity_days = 14400 # ... + up to 40 more from the longevity gene
+old_age_death_per_day = 0.0003  # about 10% a year at the natural lifespan ...
+old_age_doubling_days = 1800    # ... doubling every 5 years after it
+founder_min_age_days = 6480     # founders arrive aged 18-25
+founder_max_age_days = 9000
+gestation_days = 270
+conceive_cooldown_days = 540    # at least 18 months between children
+failed_conceive_cooldown_days = 30
+propose_cooldown_days = 30
+group_ask_cooldown_days = 30
+rejoin_days = 360
+order_days = 30
+forget_after_days = 360         # small memories fold into summaries after a year
+forget_every_days = 30          # ... checked once a month (M8.5 speed)
+memory_recency_per_day = 0.995  # memories fade over months, not days
+scheduled_sleep = 1             # everyone sleeps at their own hours
+inventions = 1                  # M8b: materials, tinkering, inventing, teaching
+goals = 1                       # M8c: drives, goals and long-term projects
+talents = 1                     # M8d: inborn talents, healing, professions
+trade = 1                       # M8d: barter, promises, money of their own
+reflect_every_days = 90         # the LLM reflection: once a season
+regen_dry = 0.7                 # berries grow less in the dry and cold seasons
+regen_cold = 0.5
+
+[llm]
+enabled = false
+# M8f: the LLM's time goes to real decisions, at the machine's maximum (±10%).
+max_calls_per_minute = 85       # bench-llm: llama3 71/min one at a time, 115/min with 4 workers
+workers = 4                     # plans and reflections go to 4 model workers at once
+max_calls_per_tick = 0          # no old per-watch cap: the governor keeps the pace
+max_calls_per_day = 0
+plan_every_days = 10            # each adult's own plan for the coming days
+voice_greetings = false         # greetings are the rules'
+chatter_share = 0.3             # the LLM voices 3 in 10 free-time conversations
+conversation_turns = 2

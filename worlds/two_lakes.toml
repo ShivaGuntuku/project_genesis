@@ -1,0 +1,74 @@
+# Two lakes (M7 demo): a wide valley with water at both ends. Founders start in the middle.
+# Groups tend to form around each lake. On day 40 the west lake dries up for 15 days,
+# and its people must go east, where the other group lives.
+#
+#   genesis new --config worlds/two_lakes.toml
+#   genesis view two_lakes   ·   genesis dashboard two_lakes
+
+[world]
+name = "two_lakes"
+seed = 9
+width = 36
+height = 20
+default_terrain = "plains"
+
+[[world.regions]]   # west lake (lake 1)
+terrain = "water"
+x = [8, 11]
+y = [7, 12]
+
+[[world.regions]]   # east lake (lake 2)
+terrain = "water"
+x = [24, 27]
+y = [7, 12]
+
+[[world.regions]]   # woods between them
+terrain = "forest"
+x = [15, 20]
+y = [0, 4]
+
+[[world.regions]]   # hills
+terrain = "mountain"
+x = [16, 19]
+y = [15, 19]
+
+[[resources.food]]   # west berries
+x = 6
+y = 5
+regen_per_tick = 3
+
+[[resources.food]]
+x = 10
+y = 15
+regen_per_tick = 3
+
+[[resources.food]]   # east berries
+x = 29
+y = 5
+regen_per_tick = 3
+
+[[resources.food]]
+x = 25
+y = 15
+regen_per_tick = 3
+
+[population]
+founders = 10
+names = ["John", "Sarah", "Mira", "Kael", "Lysa", "Oren", "Teo", "Dax", "Ione", "Rhea",
+         "Ash", "Bryn", "Cato", "Dena", "Eli", "Fen", "Gil", "Hana", "Ivo", "Juna"]
+start_center = [18, 10]
+start_radius = 7
+
+[time]
+start_hour = 8
+
+[[events]]          # the west lake dries up for 15 days
+kind = "drought"
+target = 1
+day = 40
+days = 15
+
+[rules]
+
+[llm]
+enabled = false

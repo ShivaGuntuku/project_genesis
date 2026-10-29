@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Genesis Viewer</title>
+    <link rel="icon" href="data:," />
+  </head>
+  <body>
+    <header id="topbar">
+      <span class="brand">GENESIS</span>
+      <span id="world-name">…</span>
+      <span id="clock">connecting…</span>
+      <span id="alive"></span>
+      <span class="spacer"></span>
+      <button id="play" title="Space">⏸ Pause</button>
+      <span id="speeds">
+        <button data-speed="0.5">½×</button><button data-speed="1">1×</button><button data-speed="2">2×</button
+        ><button data-speed="5">5×</button><button data-speed="20">20×</button><button data-speed="0">max</button>
+      </span>
+      <label class="toggle"><input type="checkbox" id="links" /> relationships</label>
+      <input id="search" list="names" placeholder="find someone…" />
+      <datalist id="names"></datalist>
+    </header>
+    <main>
+      <div id="game"></div>
+      <aside id="panel" hidden></aside>
+    </main>
+    <footer id="feed">
+      <div class="feed-head">
+        <b>Events</b>
+        <span class="dim">click to look · "why?" shows the causes</span>
+        <label class="toggle"><input type="checkbox" id="routine" /> show routine</label>
+      </div>
+      <ul id="events"></ul>
+    </footer>
+    <div id="why" class="modal" hidden></div>
+    <div id="toast" hidden></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

@@ -1,0 +1,43 @@
+# --- Private: design, roadmap and planning documents (kept locally only) ---
+docs/
+*.private.md
+NOTES*.md
+
+# --- Credentials and local settings (never commit) ---
+.env
+.env.*
+*.pem
+*.key
+secrets/
+.claude/
+
+# --- World files, run state and snapshots (large, personal) ---
+data/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.damaged
+experiment*.json
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+build/
+
+# --- Front-ends (build them locally: see README) ---
+ui/node_modules/
+ui/dist/
+dashboard/node_modules/
+dashboard/dist/
+
+# --- Editors and OS ---
+.vscode/
+.idea/
+.DS_Store
+*.log
+output.txt

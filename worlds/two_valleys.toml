@@ -1,0 +1,135 @@
+# Two valleys (M8a-M8d): the first millennium world, hand-made and small (used by the tests).
+# For the full experiment use worlds/millennium.toml (generated valleys, disasters: M8e).
+#
+#   1 tick = 1 watch (6 hours: night, dawn, day, dusk); 360-day years with four seasons.
+#   Lives last decades: children until 15, lifespans of about 45-85 years.
+#   Each agent sleeps 6-10 hours at their own bedtime (genes), so the awake people (and the
+#   LLM calls they make) are spread over the day. See docs/10 and docs/15.
+#
+#   genesis new --config worlds/two_valleys.toml
+#   genesis run two_valleys --days 720 --quiet        (2 years)
+
+[world]
+name = "two_valleys"
+seed = 11
+width = 44
+height = 24
+default_terrain = "plains"
+
+[[world.regions]]   # the ridge between the valleys
+terrain = "mountain"
+x = [20, 23]
+y = [0, 24]
+
+[[world.regions]]   # the pass through the ridge
+terrain = "plains"
+x = [20, 23]
+y = [11, 12]
+
+[[world.regions]]   # west valley lake (lake 1)
+terrain = "water"
+x = [6, 9]
+y = [8, 12]
+
+[[world.regions]]   # east valley lake (lake 2)
+terrain = "water"
+x = [33, 36]
+y = [10, 14]
+
+[[world.regions]]   # west woods
+terrain = "forest"
+x = [2, 8]
+y = [17, 22]
+
+[[world.regions]]   # east woods
+terrain = "forest"
+x = [37, 42]
+y = [1, 5]
+
+[[resources.food]]   # west berries
+x = 4
+y = 4
+regen_per_tick = 3
+
+[[resources.food]]
+x = 13
+y = 15
+regen_per_tick = 3
+
+[[resources.food]]   # near the west start
+x = 15
+y = 8
+regen_per_tick = 3
+
+[[resources.food]]   # east berries
+x = 30
+y = 4
+regen_per_tick = 3
+
+[[resources.food]]   # near the east start
+x = 28
+y = 12
+regen_per_tick = 3
+
+[[resources.food]]
+x = 39
+y = 18
+regen_per_tick = 3
+
+[population]
+founders = 12
+names = ["Asha", "Bren", "Caro", "Dain", "Elsa", "Fenn", "Gaia", "Hux", "Iris", "Jory",
+         "Kesa", "Lune", "Mott", "Nira", "Odo", "Pell", "Quin", "Rue", "Sela", "Tavi"]
+start_center = [12, 10]
+
+[[population.starts]]
+name = "west valley"
+x = 12
+y = 10
+radius = 4
+founders = 6
+
+[[population.starts]]
+name = "east valley"
+x = 31
+y = 9
+radius = 4
+founders = 6
+
+[time]
+ticks_per_day = 4       # watches
+days_per_year = 360
+start_hour = 6          # the first watch is dawn
+seasons = true
+save_every_ticks = 4    # save once a simulated day (a crash loses at most a day; resume is exact)
+
+[rules]
+# Lives in years (all durations are in days).
+adult_age_days = 5400           # 15 years
+lifespan_base_days = 16200      # 45 years ...
+lifespan_longevity_days = 14400 # ... + up to 40 more from the longevity gene
+old_age_death_per_day = 0.0003  # about 10% a year at the natural lifespan ...
+old_age_doubling_days = 1800    # ... doubling every 5 years after it
+founder_min_age_days = 6480     # founders arrive aged 18-25
+founder_max_age_days = 9000
+gestation_days = 270
+conceive_cooldown_days = 540    # at least 18 months between children
+failed_conceive_cooldown_days = 30
+propose_cooldown_days = 30
+group_ask_cooldown_days = 30
+rejoin_days = 360
+order_days = 30
+forget_after_days = 360         # small memories fold into summaries after a year
+memory_recency_per_day = 0.995  # memories fade over months, not days
+scheduled_sleep = 1             # everyone sleeps at their own hours
+inventions = 1                  # M8b: materials, tinkering, inventing, teaching
+goals = 1                       # M8c: drives, goals and long-term projects
+talents = 1                     # M8d: inborn talents, healing, professions
+trade = 1                       # M8d: barter, promises, money of their own
+reflect_every_days = 90         # the LLM reflection: once a season
+regen_dry = 0.7                 # berries grow less in the dry and cold seasons
+regen_cold = 0.5
+
+[llm]
+enabled = false
+max_calls_per_minute = 0        # set from `genesis bench-llm` before an LLM run

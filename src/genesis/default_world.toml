@@ -1,0 +1,76 @@
+# Genesis world configuration.
+# 1 tick = 1 simulated hour. Coordinates start at (0, 0) in the top-left corner.
+
+[world]
+name = "eden"
+seed = 42
+width = 20
+height = 20
+default_terrain = "plains"   # plains | forest | mountain | water
+
+# Rectangular terrain regions, painted in order. Ranges are inclusive.
+# Water is not walkable; agents drink from any tile next to it.
+[[world.regions]]
+terrain = "forest"
+x = [2, 5]
+y = [10, 13]
+
+[[world.regions]]
+terrain = "mountain"
+x = [15, 18]
+y = [2, 5]
+
+[[world.regions]]
+terrain = "water"
+x = [8, 10]
+y = [14, 16]
+
+# Food patches. One meal = rules.food_per_meal units.
+# Total regrowth sets how many agents the world can feed:
+# each agent eats about hunger_per_tick / hunger_per_food_unit = 0.4 units per hour.
+[[resources.food]]
+x = 5
+y = 5
+quantity = 100
+max_quantity = 100
+regen_per_tick = 3
+
+[[resources.food]]
+x = 15
+y = 10
+quantity = 100
+max_quantity = 100
+regen_per_tick = 3
+
+[[resources.food]]
+x = 4
+y = 16
+quantity = 100
+max_quantity = 100
+regen_per_tick = 3
+
+[population]
+founders = 3
+names = ["John", "Sarah", "Mira", "Kael", "Lysa", "Oren", "Teo", "Dax", "Ione", "Rhea"]
+start_center = [10, 10]   # founders start on random walkable tiles near here
+start_radius = 3
+
+[time]
+start_hour = 8
+
+# Override any default from src/genesis/rules.py, for example:
+[rules]
+# thirst_per_tick = 3
+# vision_radius = 3
+
+# The local LLM mind (M4). Off by default: rules decide everything.
+# Turn it on here, or with `genesis new --llm`. Needs Ollama running with the models pulled.
+[llm]
+enabled = false
+chat_model = "llama3"        # conversation turns (llama3.2:3b is about 2x faster)
+mind_model = "llama3"        # hard choices: give or refuse, truth or lie, give in to a threat
+max_calls_per_tick = 4       # over budget, the rules decide
+max_calls_per_day = 150
+conversation_turns = 3       # spoken turns in one free-time conversation
+# temperature = 0.8
+# timeout_seconds = 20

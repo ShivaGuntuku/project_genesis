@@ -1,0 +1,51 @@
+[project]
+name = "genesis"
+version = "0.1.0"
+description = "A living world that writes its own history: a local, deterministic simulation of a society whose culture emerges from its agents."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "ShivaPrasad Guntuku" }]
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.162.0",
+    "httpx>=0.28.1",
+    "networkx>=3.7",
+    "numpy>=2.5.4",
+    "pydantic>=2.14.1",
+    "rich>=13",
+    "uvicorn[standard]>=0.54.0",
+]
+
+[project.urls]
+Repository = "https://github.com/ShivaGuntuku/project_genesis"
+
+[project.scripts]
+genesis = "genesis.cli:main"
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "pytest>=8",
+    "ruff>=0.6",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/genesis"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["tests"]
+filterwarnings = ["ignore:Using `httpx` with `starlette.testclient`"]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+extend-exclude = ["tools"]
+
+[tool.ruff.lint]
+select = ["E", "F", "B", "I"]
