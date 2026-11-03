@@ -63,7 +63,7 @@ def schedule(seed: int, rules, days_per_year: int, regions: list[str]) -> tuple[
         return ()
     rng = random.Random(f"disasters:{seed}")
     names = regions or ["valley"]
-    out = []
+    out: list = []
     year = rng.uniform(rules.disaster_min_years, rules.disaster_max_years)
     while year < rules.disaster_horizon_years:
         kind = rng.choice(KINDS)
@@ -162,6 +162,10 @@ def start(ctx, d: Disaster) -> int:
     if d.kind == "sickness" and people:
         for a in ctx.rng.sample(people, max(1, len(people) // 5)):
             fall_sick(ctx, a, event_id)
+    if r.culture:  # S2.4: a tale to tell
+        from genesis.culture import ideas
+
+        ideas.on_disaster(ctx, d.kind, event_id, people)
     return event_id
 
 
@@ -190,10 +194,13 @@ def each_tick(ctx, now: list[Disaster]):
         if d.kind == "winter":
             for a in hit:
                 if not _sheltered(ctx, a) and _company(a, agents, 1) < 2:
-                    harm(ctx, a, r.cold_damage_per_day * per_tick, "winter", cause)
+                    harm(ctx, a, r.cold_damage_per_day * per_tick * _cold(a), "winter", cause)
+                    _trouble(ctx, a, "cold", 1.0)
         elif d.kind == "predators" and night:
             for a in hit:
                 if _company(a, agents, 2) == 0 and ctx.rng.random() < r.predator_chance:
+                    if a.bonus.get("lights") and ctx.rng.random() < 0.5:
+                        continue  # S2.2: a light keeps them back
                     _beasts(ctx, a, cause)
         elif d.kind == "sickness":
             for a in hit:
@@ -215,7 +222,29 @@ def each_tick(ctx, now: list[Disaster]):
             a.immune_until = ctx.tick + cal.ticks(days=r.immune_days)
             a._emit(ctx.log, ctx.tick, ev.RECOVERED)
         else:
-            harm(ctx, a, r.sick_damage_per_day * per_tick, "sickness", a.sick_event)
+            heals = 0.5 if a.bonus.get("heals") else 1.0  # S2.2: something that heals
+            harm(ctx, a, r.sick_damage_per_day * per_tick * heals, "sickness", a.sick_event)
+            _trouble(ctx, a, "sickness", per_tick)
+            if a.bonus.get("heals") and cal.hour(ctx.tick) < cal.hours_per_tick:
+                _wear(ctx, a, "heals")  # once a day
+
+
+def _cold(agent) -> float:
+    """S2.2: how much of the cold gets through: less with something warm, less by a fire."""
+    return (0.3 if agent.bonus.get("warm") else 1.0) * (0.5 if agent.bonus.get("fire") else 1.0)
+
+
+def _trouble(ctx, agent, problem, amount):
+    if ctx.world.rules.inventions:
+        from genesis.culture import inventions
+
+        inventions.trouble(agent, ctx.world.rules, problem, amount)
+
+
+def _wear(ctx, agent, function):
+    from genesis.culture import inventions
+
+    inventions.wear(ctx, agent, function)
 
 
 def _sheltered(ctx, agent) -> bool:
@@ -263,6 +292,9 @@ def tend_sickness(ctx, healer, patient):
 def _beasts(ctx, agent, cause_id):
     r = ctx.world.rules
     armed = agent.bonus.get("reaches", 0) > 0 or agent.bonus.get("cuts", 0) > 0
+    armed = armed or bool(agent.bonus.get("pierces") or agent.bonus.get("fire"))  # S2.2
+    _trouble(ctx, agent, "beasts", 3.0)
+    _trouble(ctx, agent, "dark", 1.0)
     driven_off = armed and ctx.rng.random() < r.armed_drive_off
     damage = 0.0 if driven_off else ctx.rng.uniform(r.beast_damage_min, r.beast_damage_max)
     event_id = agent._emit(

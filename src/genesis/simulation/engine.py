@@ -1,3 +1,4 @@
+import json
 import random
 
 from genesis.agents.population import Population
@@ -311,6 +312,17 @@ class Simulation:
         deaths = [e for e in self._events_since(first_event_id) if e.type == ev.DIED]
         for event in deaths:
             family.grieve(ctx, event)
+            if self.world.rules.culture:  # S2.4: stories and customs of death
+                from genesis.culture import ideas
+
+                dead = ctx.agents.get(event.actors[0])
+                mourners = [
+                    ctx.agents[e.actors[0]]
+                    for e in ctx.log.recent[-200:]
+                    if e.type == ev.GRIEVED and e.cause_id == event.id and e.actors[0] in ctx.agents
+                ]
+                if dead is not None:
+                    ideas.on_death(ctx, dead, event, mourners)
             dead = ctx.agents.get(event.actors[0])
             if dead is not None:
                 groups.on_death(ctx, dead, event.id)
@@ -348,6 +360,19 @@ class Simulation:
 
             for agent in self.population.get_alive():
                 inventions.fade_problems(agent)
+                inventions.daily_wear(ctx, agent)  # S2.2 (nothing in older worlds)
+            if self.world.rules.research:
+                from genesis.culture import research
+
+                first_event = self.log.next_id
+                research.daily(ctx, self)  # S2.3: apprentices, records
+                self._remember(first_event)
+        if self.world.rules.culture:
+            from genesis.culture import ideas
+
+            first_event = self.log.next_id
+            ideas.daily(ctx, self)  # S2.4: ideas fade, pass to children, get words, die
+            self._remember(first_event)
         first_event = self.log.next_id
         groups.nightly(ctx)
         self._remember(first_event)
@@ -370,6 +395,11 @@ class Simulation:
             first_event = self.log.next_id
             self._migration(ctx)
             self._remember(first_event)
+        land = self.world.land
+        every = max(1, self.world.rules.land_every_days)
+        if land is not None and self.world.calendar.day_index(tick - 1) % every == every - 1:
+            for kind, where, data in land.step(self, tick):  # S2.1: a month of change
+                self.log.emit(tick, ev.LAND_CHANGED, position=where, data={"kind": kind, **data})
         if self.world.calendar.watches and self.world.calendar.day_of_year(tick) == 1:  # new year
             self._yearly_snapshot(tick)
 
@@ -401,6 +431,21 @@ class Simulation:
                 a.home_region, a.away_days = here, 0
                 _ = event_id
 
+    def _valley_culture(self, v: dict) -> dict:
+        """S2.3/S2.4 for the yearly record: lore known and shared ideas held by 2+ here."""
+        r = self.world.rules
+        out: dict = {}
+        if r.research:
+            out["lore"] = len(v.get("lore", ()))
+        if r.culture:
+            pool = self.world.culture["ideas"]
+            out["culture"] = [
+                [i, pool[i]["kind"], pool[i]["name"], pool[i]["text"]]
+                for i, n in sorted(v.get("held", {}).items())
+                if n >= 2 and i in pool
+            ]
+        return out
+
     def _yearly_snapshot(self, tick):
         """Once a year: each living mind and each valley, as they are (M8e, for long runs)."""
         from genesis.agents import talents
@@ -415,6 +460,9 @@ class Simulation:
             v = valleys.setdefault(region, {"people": 0, "ideas": set(), "names": []})
             v["people"] += 1
             v["ideas"] |= a.knowledge
+            for i in a.ideas:  # S2.4: how many here hold each shared idea
+                v.setdefault("held", {})[i] = v.setdefault("held", {}).get(i, 0) + 1
+            v.setdefault("lore", set()).update(a.lore)  # S2.3
             beliefs = [m.text for m in a.stream.beliefs(3)] if hasattr(a.stream, "beliefs") else []
             self.pending_yearly.append(
                 (
@@ -450,6 +498,7 @@ class Simulation:
                                 w.concepts[c].name for c in v["ideas"] if c in w.concepts
                             ),
                             "currency": money.get(k),
+                            **self._valley_culture(v),
                         }
                         for k, v in valleys.items()
                     },
@@ -461,6 +510,8 @@ class Simulation:
                 },
             )
         )
+        if w.land is not None:  # S2.1: woods, water and patches this year (row -1)
+            self.pending_yearly.append((year, -1, w.land.yearly(w)))
 
     # --------------------------------
     # Memory
@@ -504,12 +555,13 @@ class Simulation:
         forgotten, summaries = memory.forget(
             agent.stream, self.tick_count, self.world.rules, self.world.calendar
         )
+        for fields in summaries:
+            self.add_memory(agent, **fields)
+        forgotten += memory.trim(agent.stream, self.world.rules)  # a mind holds so much
         if not forgotten:
             return
         self.pending_forgotten.extend((m.id, self.tick_count) for m in forgotten)
         self._drop_vectors(forgotten)
-        for fields in summaries:
-            self.add_memory(agent, **fields)
 
     def _drop_vectors(self, memories):
         for m in memories:
@@ -537,4 +589,7 @@ class Simulation:
                 (a.id, len(a.stream), a.stream.items[-1].id if a.stream.items else 0)
                 for a in self.population.get_alive()
             ),
+            self.world.land.fingerprint() if self.world.land is not None else None,
+            json.dumps(self.world.research, sort_keys=True) if self.world.rules.research else None,
+            json.dumps(self.world.culture, sort_keys=True) if self.world.rules.culture else None,
         )

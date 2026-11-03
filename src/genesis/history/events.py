@@ -35,6 +35,12 @@ FIGHT = "fight"  # M7: conflict
 EXPERIMENTED = "experimented"  # M8b: a try that didn't work (what worked is "invented")
 INVENTED = "invented"  # a new concept, named in the valley's words
 MADE = "made"  # made a thing someone invented
+LORE_FOUND = "lore_found"  # S2.3: a fact found out by testing (data.first: new to the world)
+RECORDED = "recorded"  # S2.3: lore or a way of making marked in a record
+IDEA_BORN = "idea_born"  # S2.4: a shared idea (belief, value, story, custom, norm) appears
+IDEA_LOST = "idea_lost"  # S2.4: nobody holds it any more
+NORM_BROKEN = "norm_broken"  # S2.4: refused what their group's norm asks
+ITEM_BROKE = "item_broke"  # S2.2: a made thing wore out (the trouble it answered comes back)
 BUILT = "built"  # a structure placed in the world (a shelter)
 LEARNED = "learned"  # after being taught (data.learned says whether it stuck)
 CONCEPT_LOST = "concept_lost"  # nobody alive knows it any more
@@ -50,6 +56,7 @@ BEAST_ATTACK = "beast_attack"
 MIGRATED = "migrated"
 PLANNED = "planned"  # M8f: their own plan for the coming days
 INTERVENTION = "intervention"  # M9: God Mode (origin = god)
+LAND_CHANGED = "land_changed"  # S2.1: a berry patch or a pond came or went
 REFLECTED = "reflected"  # an agent's nightly reflection: new beliefs, self-story, feelings (M5)
 
 NATURAL = "natural"

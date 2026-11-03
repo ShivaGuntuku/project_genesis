@@ -18,6 +18,8 @@ daily save; otherwise `genesis god` applies them at once.
 import json
 import random
 import time
+from collections.abc import Callable
+from typing import Any
 
 from genesis.history import events as ev
 from genesis.world.disasters import DAYS, KINDS, Disaster
@@ -87,6 +89,9 @@ def add_food(sim, x: int, y: int, regen: int = 3, quantity: int = 100) -> int:
     if any(f.position == p for f in w.food_sources):
         raise GodError(f"there is already a patch at ({x},{y})")
     fid = max((f.id for f in w.food_sources), default=0) + 1
+    if w.land is not None:  # S2.1: never reuse the number of a patch the land made or lost
+        fid = max(fid, w.land.next_food)
+        w.land.next_food = fid + 1
     w.food_sources.append(Food(fid, p, quantity, 100, regen, 0))
     w.food_region[fid] = w.region_at.get(p, w.region_names[0])
     _state(sim)["food"].append({"id": fid, "x": x, "y": y, "regen": regen})
@@ -219,7 +224,7 @@ def whisper(sim, agent_id: int, text: str) -> int:
     return event
 
 
-COMMANDS = {
+COMMANDS: dict[str, Callable[..., Any]] = {
     "add_food": add_food,
     "remove_food": remove_food,
     "lake": lake,
@@ -267,7 +272,7 @@ def restore(sim, saved: dict):
     if not saved:
         return
     w = sim.world
-    w.god = {k: list(v) for k, v in saved.items()}
+    w.god = {k: dict(v) if isinstance(v, dict) else list(v) for k, v in saved.items()}
     for food_id in saved.get("removed_food", []):
         w.food_sources = [f for f in w.food_sources if f.id != food_id]
     for f in saved.get("food", []):

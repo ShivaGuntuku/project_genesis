@@ -41,7 +41,9 @@ def options(agent, ctx) -> list[tuple[str, str]]:
     from genesis.culture import inventions as inv
 
     world, r = ctx.world, ctx.world.rules
-    out = [("explore", "Go and see land you don't know yet")]
+    out = []
+    if unseen_share(agent, world) >= r.plan_explore_unseen:  # S2.6.7: not for a known valley
+        out.append(("explore", "Go and see land you don't know yet"))
     if agent.goal:
         out.append(("goal", f'Work towards what you want: "{agent.goal["text"]}"'))
     if r.inventions:
@@ -51,6 +53,7 @@ def options(agent, ctx) -> list[tuple[str, str]]:
             if (
                 c
                 and c.lost_tick is None
+                and c.function != inv.MATERIAL  # S2.2: stuff is made on the way to a thing
                 and not inv.has_item_for(agent, world.concepts, c.function)
             ):
                 out.append((f"make:{cid}", f"Make a {c.name} (it {c.function})"))
@@ -76,6 +79,23 @@ def options(agent, ctx) -> list[tuple[str, str]]:
                 out.append((f"move:{name}", f"Leave for {name}"))
     out.append(("rest", "Take it easy and rest"))
     return out
+
+
+def unseen_share(agent, world) -> float:
+    """The share of the walkable land in this person's valley they have never seen."""
+    key = getattr(world, "land_version", 0)
+    cache = getattr(world, "_valley_tiles", None)
+    if cache is None or cache[0] != key:
+        tiles: dict[str, list] = {}
+        for p, name in world.region_at.items():
+            if world.is_walkable(p):
+                tiles.setdefault(name, []).append(p)
+        cache = world._valley_tiles = (key, tiles)
+    mine = cache[1].get(world.region_at.get(agent.position), [])
+    if not mine:
+        return 1.0
+    seen = agent.memory.seen_positions
+    return sum(1 for p in mine if p not in seen) / len(mine)
 
 
 def question(ctx, agent):

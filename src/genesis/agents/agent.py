@@ -9,7 +9,7 @@ from genesis.history import events as ev
 from genesis.history.events import EventLog
 from genesis.mind import planner
 from genesis.mind.decision import ActionType, DecisionEngine
-from genesis.mind.memory import AgentMemory, ExplorationGoal
+from genesis.mind.memory import AgentMemory, ExplorationGoal, KnownLocation
 from genesis.mind.perception import Observation, PerceptionSystem
 from genesis.mind.planner import ExplorationPlanner, NavigationPlanner
 from genesis.mind.stream import MemoryStream
@@ -90,6 +90,8 @@ class Agent:
     materials: dict = field(default_factory=dict)  # material -> count carried
     items: list = field(default_factory=list)  # [{"concept": id, "uses": n}]
     knowledge: set = field(default_factory=set)  # concept ids they know how to make
+    lore: set = field(default_factory=set)  # S2.3: facts they found out or were told
+    ideas: dict = field(default_factory=dict)  # S2.4: shared idea id -> how strongly held
     problems: dict = field(default_factory=dict)  # what keeps going wrong -> how much
     project: dict | None = None  # set by decide(): what to gather / try / make
     bonus: dict = field(default_factory=dict)  # what their things add (see inventions)
@@ -138,6 +140,8 @@ class Agent:
             self.talent == "keen-eyed" or (self.talent == "water-sense" and searching_water)
         ):
             radius += 2  # M8d talents
+        if self.bonus.get("lights"):
+            radius += 1  # S2.2: a light to see by
 
         return max(1, radius)
 
@@ -299,13 +303,18 @@ class Agent:
         hours_before = self.hours_left
 
         if action == ActionType.EAT:
+            before = self.hunger
             self._eat(world, tick, log)
+            if r.inventions >= 2 and self.hunger < before:  # S2.2: tools used, meals judged
+                inventions.after_meal(ctx, self)
         elif action == ActionType.DRINK:
             self._drink(world, tick, log)
         elif action == ActionType.SLEEP:
             rest = r.sleep_energy * world.calendar.hours_per_tick
             if world.structures and inventions.sheltered(self, world.structures):
                 rest *= 1.5  # a shelter of their own or their group's (M8b)
+            if self.bonus.get("warm") and world.calendar.season_index(tick) == 3:
+                rest *= 1.2  # S2.2: something warm in the cold season
             self.energy = min(100, self.energy + rest)
         elif action == ActionType.REST:
             self.energy = min(100, self.energy + r.rest_energy * world.calendar.hours_per_tick)
@@ -343,7 +352,12 @@ class Agent:
         elif action == ActionType.GATHER:
             self._walking(world, lambda: self._gather_step(ctx))
         elif action == ActionType.EXPERIMENT:
-            inventions.experiment(ctx, self, self.project["problem"])
+            if "research" in self.project:  # S2.3: a question, tested
+                from genesis.culture import research
+
+                research.study(ctx, self, *self.project["research"])
+            else:
+                inventions.experiment(ctx, self, self.project["problem"])
         elif action == ActionType.MAKE:
             concept = world.concepts.get(self.project["concept"])
             if concept is not None:
@@ -430,6 +444,10 @@ class Agent:
             value *= r.child_forage_efficiency
         if self.bonus.get("cuts"):  # a cutting tool gets more from a meal's gathering (M8b)
             value *= 1.2
+        if self.bonus.get("grinds"):  # S2.2
+            value *= 1.1
+        if self.bonus.get("cooks") and self.bonus.get("fire"):  # S2.2: cooking needs fire
+            value *= 1.25
         return value
 
     def _drink(self, world, tick, log):
@@ -523,6 +541,14 @@ class Agent:
 
         self.talked = True
         interaction.converse(ctx, self, other)
+        if ctx.world.rules.research:  # S2.3: a fact may come up in the talk
+            from genesis.culture import research
+
+            research.share(ctx, self, other)
+        if ctx.world.rules.culture:  # S2.4: an idea may pass on
+            from genesis.culture import ideas
+
+            ideas.share(ctx, self, other)
 
     def _tend(self, ctx):
         """Go to someone hurt or sick and tend them (M8f: a healer's calling)."""
@@ -628,7 +654,7 @@ class Agent:
     def _check_told_places(self, observation, ctx):
         """Look at places others told me about. A place that isn't what they said was a lie."""
         world = ctx.world
-        visible = set(observation.visible_tiles)
+        visible = observation.tile_set()
         patches = set(observation.visible_patches)
 
         for key in list(self.memory.told):
@@ -674,12 +700,20 @@ class Agent:
             return False
 
         nxt = path[1]
-        if self.route is not None:  # only while walking within one watch
-            self.route = path[1:]
-        dx, dy = nxt.x - self.position.x, nxt.y - self.position.y
-        self.facing = "right" if dx > 0 else "left" if dx < 0 else "down" if dy > 0 else "up"
-        self.position = nxt
-        self.memory.remember_position(self.position)
+        land = world.land
+        # S2.1: on a worn path (from path to path) one walks twice as far in the same time.
+        steps = 2 if land is not None and len(path) > 2 and land.on_path(self.position, nxt) else 1
+        for step in path[1 : 1 + steps]:
+            if land is not None and step != path[1] and not land.on_path(self.position, step):
+                break
+            if self.route is not None:  # only while walking within one watch
+                self.route = path[path.index(step) :]
+            dx, dy = step.x - self.position.x, step.y - self.position.y
+            self.facing = "right" if dx > 0 else "left" if dx < 0 else "down" if dy > 0 else "up"
+            self.position = step
+            self.memory.remember_position(self.position)
+            if land is not None:
+                land.walks[step] = land.walks.get(step, 0) + 1
         return True
 
     def _practice(self, skill, amount, world, tick, log):
@@ -730,24 +764,32 @@ class Agent:
                     cause_id=self.pressing_events.get("food"),
                 )
 
-        # Forget food sources that are in view but no longer hold a meal.
-        visible_food = {food.position for food in observation.visible_food}
-        seen = set(observation.visible_tiles)
+        # Forget food sources that are in view but no longer hold a meal, and shores in view
+        # that have dried up (a drought, M7). One pass (S2.6.6).
+        still = {
+            "food": {food.position for food in observation.visible_food},
+            "water": set(observation.visible_water),
+        }
+        seen = observation.tile_set()
+        self.memory.forget_many(
+            [
+                loc
+                for loc in self.memory.known_locations
+                if loc.resource_type in still
+                and loc.position in seen
+                and loc.position not in still[loc.resource_type]
+            ]
+        )
 
-        for loc in self.memory.get_known_locations("food"):
-            if loc.position in seen and loc.position not in visible_food:
-                self.memory.forget_location("food", loc.position)
+        first_water = bool(observation.visible_water) and not any(
+            k.resource_type == "water" for k in self.memory.discovered
+        )
 
-        # ...and shores in view that have dried up (a drought, M7).
-        visible_water = set(observation.visible_water)
-        for loc in self.memory.get_known_locations("water"):
-            if loc.position in seen and loc.position not in visible_water:
-                self.memory.forget_location("water", loc.position)
-
-        first_water = not any(k.resource_type == "water" for k in self.memory.discovered)
-
+        known, discovered = self.memory._known, self.memory.discovered
         for shore in observation.visible_water:
-            self.memory.remember_location("water", shore)
+            place = KnownLocation("water", shore)
+            if place not in known or place not in discovered:  # S2.6.6: most are known
+                self.memory.remember_location("water", shore)
 
         if observation.visible_water and first_water:
             self._emit(
@@ -809,6 +851,8 @@ class Agent:
             "materials": self.materials,
             "items": self.items,
             "knowledge": sorted(self.knowledge),
+            "lore": sorted(self.lore),
+            "ideas": {str(k): v for k, v in sorted(self.ideas.items())},
             "problems": self.problems,
             "bonus": self.bonus,
             "goal": self.goal,
@@ -869,6 +913,8 @@ class Agent:
             materials=dict(state.get("materials", {})),
             items=[dict(i) for i in state.get("items", [])],
             knowledge=set(state.get("knowledge", [])),
+            lore=set(state.get("lore", [])),
+            ideas={int(k): v for k, v in state.get("ideas", {}).items()},
             problems=dict(state.get("problems", {})),
             bonus=dict(state.get("bonus", {})),
             goal=dict(state["goal"]) if state.get("goal") else None,

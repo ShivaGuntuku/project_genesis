@@ -84,7 +84,18 @@ class Rules:
     reflect_every_days: int = 1  # nightly reflection (LLM) every this many days
 
     # Invention (M8b; docs/15). Off: nothing is gathered, tried, made or taught.
+    # 1: Stage 1's 8 materials and 7 uses. 2 (S2.2): 14 materials, 19 uses, made things as
+    # materials, tools for working, wear and quality, troubles from cold, dark, beasts...
     inventions: int = 0
+    food_spoils_per_day: float = 0.0  # S2.2: share of carried food (above a meal) lost a day
+    items_capacity: int = 0  # S2.2: most made things one carries (0 = no limit)
+    # S2.3 research (with inventions = 2): the curious study materials; lore, apprentices,
+    # records. Off: none of it.
+    research: int = 0
+    culture: int = 0  # S2.4: shared beliefs, values, stories, customs and norms
+    research_min_curiosity: float = 0.5
+    research_cooldown_days: float = 2
+    material_find_chance: float = 0.03  # S2.2: a failed try that made new stuff is kept (x skill)
     problem_threshold: float = 5  # how much a problem must bother them before they tinker
     tinker_min_curiosity: float = 0.35
     tinker_cooldown_days: float = 1
@@ -132,6 +143,25 @@ class Rules:
     migrate_days: float = 30  # living this long in another valley is moving there
     migrate_min_risk: float = 0.5  # only the bolder set out for another valley
     explore_leash: int = 0  # 1: never explore further from known water/food than is safe
+    plan_explore_unseen: float = 0.1  # S2.6.7: "explore" is a plan only while this share of
+    # the home valley's land is still unseen (0 = always offered)
+
+    # A living land (S2.1); 0 = the land never changes. Chances are per monthly step.
+    living_land: int = 0
+    land_every_days: int = 30  # how often the land takes a step
+    woods_spread: float = 0.004  # grassland beside woods becomes woods (towards a level)
+    woods_dieback: float = 0.004  # a wooded tile at the edge dies back
+    wood_per_tree: int = 6  # wood gathered from a tile before its trees are gone
+    bare_months: int = 24  # cut or cleared ground stays bare this long, then turns to grass
+    patch_seed: float = 0.01  # a healthy berry patch seeds a new one nearby
+    patch_spawn: float = 0.008  # a new patch appears in good soil (per valley)
+    patch_strip_months: int = 3  # stripped bare this many months in a row: the patch dies
+    patch_old_age: float = 0.0005  # a patch dies of age
+    patches_per_valley: int = 10  # no new patches beyond this many in a valley
+    pond_chance: float = 0.05  # in a wet climate, a spring or pond forms (per valley)
+    pond_dry: float = 0.1  # in a dry climate, a pond dries up
+    path_steps: int = 25  # steps in a month that wear a path (twice that clears woods)
+    path_fade_months: int = 12  # a path nobody uses fades after this long
 
     # Seasons (M8a; only in worlds with time.seasons = true): berry regrowth factor
     regen_spring: float = 1.2
@@ -144,6 +174,9 @@ class Rules:
     memory_recency_per_day: float = 0.8867  # how much a memory's recency fades each day
     #   (0.995 per hour; long runs use a slower fade, e.g. 0.999)
     forget_max_importance: int = 3  # "small" = importance at or below this
+    memory_cap: int = 300  # most memories a mind keeps (beliefs apart); the least important,
+    #   then the oldest, are forgotten beyond it. 0 = no limit (memories grew to 6,500 each)
+    belief_cap: int = 60  # most beliefs a mind keeps; the oldest go first
     reflection_min_importance: int = 4  # a day with nothing this important needs no reflection
     reflection_feeling_step: float = 0.1  # most a night's reflection can move a feeling
 

@@ -126,7 +126,7 @@ def cmd_run(args):
     from genesis.simulation import service
 
     try:
-        with service.run_lock(world_path(args.world), "genesis run"):
+        with service.run_lock(world_path(args.world), "genesis run", kind="run"):
             _cmd_run(args)
     except service.WorldBusy as e:
         raise SystemExit(str(e)) from e
@@ -166,11 +166,23 @@ def _cmd_run(args):
 
     every = sim.config.save_every_ticks
 
+    from genesis.simulation import service
+
+    world_file = world_path(args.world)
+    if service._read_control(world_file) == "stop":  # a stop asked of an earlier run
+        service.control(world_file, "run")
+
     def loop(live=None):
         while sim.tick_count < target:
             sim.tick()
             if sim.tick_count % every == 0:
                 store.save(sim)  # one transaction (per tick, or per day in long runs)
+                command = service._read_control(world_file)  # S2.0: pause/stop obeyed
+                while command == "pause" and not stop["reason"]:
+                    time.sleep(0.5)
+                    command = service._read_control(world_file)
+                if command == "stop":
+                    return "stopped"
 
             if live is not None:
                 live.update(_live_view(sim, names))
@@ -211,7 +223,8 @@ def _cmd_run(args):
         console.print(
             f"LLM: {st['ok']} answered, {st['failed']} failed (rules decided), "
             f"{st['skipped_budget']} over budget, {st.get('skipped_rate', 0)} over the governor's "
-            f"limit, {st['skipped_offline']} while offline. {waited}"
+            f"limit, {st.get('skipped_pace', 0)} left to the rules by pacing, "
+            f"{st['skipped_offline']} while offline. {waited}"
             f"See: genesis thoughts {args.world}"
         )
     console.print(f"Saved. Continue with: [bold]genesis run {args.world} --days 10[/]")
@@ -570,7 +583,7 @@ def cmd_view(args):
     from genesis.simulation import service
 
     try:
-        with service.run_lock(path, "the viewer (genesis view)"):
+        with service.run_lock(path, "the viewer (genesis view)", kind="viewer"):
             serve(
                 path,
                 port=args.port,
@@ -734,6 +747,13 @@ def cmd_bench_llm(args):
                 f"Suggested: [bold]llm.workers = {args.workers}, llm.max_calls_per_minute = "
                 f"{int(per_minute * 0.95)}[/]"
             )
+            mean_ms = bench.mean(r.latencies)
+            if mean_ms and per_minute < 1.2 * 60_000 / mean_ms:  # S2.6.3
+                console.print(
+                    "[yellow]The server answers one request at a time, so workers add nothing."
+                    "[/] For Ollama, set OLLAMA_NUM_PARALLEL=4, OLLAMA_FLASH_ATTENTION=1 and "
+                    "OLLAMA_KV_CACHE_TYPE=q8_0 (README: Speed), restart it, and measure again."
+                )
 
     for r in results:
         choices = ", ".join(f"{k} {v}" for k, v in sorted(r.choices.items()))
@@ -981,29 +1001,48 @@ def cmd_control(args):
     from genesis.simulation import service
 
     path = world_path(args.world)
-    service.control(path, {"pause": "pause", "continue": "run", "stop": "stop"}[args.command])
-    console.print(f"Asked {args.world} to {args.command} (at its next daily save).")
+    if args.command == "stop":  # S2.0: whoever runs it (long run, viewer, genesis run)
+        console.print(f"{args.world}: {service.stop_world(path)}.")
+        return
+    owner = service.holder(path)
+    service.control(path, {"pause": "pause", "continue": "run"}[args.command])
+    if owner is None:
+        console.print(f"{args.world} is not running; it will {args.command} when it runs.")
+    else:
+        console.print(f"Asked {args.world} ({owner.get('who')}) to {args.command}.")
 
 
-def cmd_runs(_args):
+def cmd_runs(args):
     from genesis.simulation import service
 
     folder = service.run_dir(data_dir() / "x.sqlite")
-    files = sorted(folder.glob("*.json")) if folder.exists() else []
-    if not files:
-        console.print("No long runs yet. Start one: genesis start WORLD --years N")
-    for f in files:
-        st = json.loads(f.read_text())
+    if args.clean:
+        for line in service.clean(folder, data_dir()) or ["nothing to clean"]:
+            console.print(line)
+    running = {o["world"]: o for o in service.owners(folder)} if folder.exists() else {}
+    names = (
+        sorted({p.stem for p in folder.glob("*.json")} | set(running)) if folder.exists() else []
+    )
+    if not names:
+        console.print("Nothing is running, and no long run has been started.")
+        return
+    console.print(f"[dim]{len(running)} of {service.max_running()} run slots in use[/]")
+    for name in names:
+        st = service.read_status(data_dir() / f"{name}.sqlite")
+        owner = running.get(name)
+        state = st.get("state") or ("running" if owner else "stopped")
+        if owner and owner.get("kind") != "long run":
+            state = "running"
+        who = f" [dim]owner: {owner.get('who')}, pid {owner.get('pid')}[/]" if owner else ""
+        where = f": {st.get('clock')} -> {st.get('target')}" if st.get("target") else ""
         eta = (
             f", about {st['eta_hours']} h to go"
-            if st.get("eta_hours") and st.get("state") == "running"
+            if st.get("eta_hours") and str(state).startswith("running")
             else ""
         )
-        console.print(
-            f"[bold]{f.stem}[/] {st.get('state')}: {st.get('clock')} -> {st.get('target')}; "
-            f"{st.get('alive')} alive; {st.get('ticks_per_second', '-')} watches/s{eta} "
-            f"[dim](updated {st.get('updated')})[/]"
-        )
+        alive = f"; {st.get('alive')} alive" if st.get("alive") is not None else ""
+        note = f" [yellow]{st['note']}[/]" if st.get("note") else ""
+        console.print(f"[bold]{name}[/] {state}{where}{alive}{eta}{who}{note}")
 
 
 def cmd_service(args):
@@ -1158,6 +1197,50 @@ def cmd_check(args):
     for r in rows:
         print(f"{marks.get(r.mark, r.mark)} {r.requirement}")
         print(f"     {r.shows}")
+    if getattr(args, "stage1_only", False):
+        return
+    from genesis.history.targets import stage2
+
+    print("\nStage 2 targets (thresholds are for 100-year runs)\n")
+    for r in stage2(path):
+        print(f"{marks.get(r.mark, r.mark)} {r.requirement}")
+        print(f"     {r.shows}")
+
+
+def cmd_compact(args):
+    """Give the space of forgotten and folded history back to the disk (SQLite VACUUM)."""
+    import sqlite3
+
+    from genesis.simulation import service
+
+    path = world_path(args.world)
+    if not path.exists():
+        raise SystemExit(f"No world at {path}.")
+    try:
+        with service.run_lock(path, "compacting (genesis compact)", kind="compact"):
+            before = path.stat().st_size
+            conn = sqlite3.connect(path)
+            try:
+                conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                conn.execute("VACUUM")
+            finally:
+                conn.close()
+            after = path.stat().st_size
+    except service.WorldBusy as e:
+        raise SystemExit(str(e)) from e
+    print(f"{path.stem}: {before / 1e6:,.0f} MB -> {after / 1e6:,.0f} MB")
+
+
+def cmd_report(args):
+    from genesis.history.report import report
+
+    path = world_path(args.world)
+    if not path.exists():
+        raise SystemExit(f"No world at {path}.")
+    out = Path(args.out) if args.out else data_dir().parent / "reports" / f"{path.stem}.md"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(report(path))
+    print(f"Report written: {out}")
 
 
 def cmd_worlds(_args):
@@ -1376,7 +1459,8 @@ def build_parser() -> argparse.ArgumentParser:
         p = sub.add_parser(name, help=f"{name} a running world (at its next daily save)")
         p.add_argument("world")
         p.set_defaults(func=cmd_control, command=name)
-    p = sub.add_parser("runs", help="what every long run is doing")
+    p = sub.add_parser("runs", help="every running world and long run, with its owner")
+    p.add_argument("--clean", action="store_true", help="tidy entries of gone runs and worlds")
     p.set_defaults(func=cmd_runs)
     p = sub.add_parser("service", help="systemd service for a world: install|remove|status|stop")
     p.add_argument("action", choices=["install", "remove", "status", "stop"])
@@ -1406,9 +1490,19 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("b")
     p.set_defaults(func=cmd_compare)
 
-    p = sub.add_parser("check", help="does a world behave as designed? (M8f)")
+    p = sub.add_parser("compact", help="shrink a stopped world's file (frees forgotten space)")
     p.add_argument("world")
+    p.set_defaults(func=cmd_compact)
+
+    p = sub.add_parser("check", help="grade a world: Stage 1 requirements and Stage 2 targets")
+    p.add_argument("world")
+    p.add_argument("--stage1-only", action="store_true", help="skip the Stage 2 targets")
     p.set_defaults(func=cmd_check)
+
+    p = sub.add_parser("report", help="write a one-page Markdown report of a run")
+    p.add_argument("world")
+    p.add_argument("--out", help="where to write it (default: data/reports/WORLD.md)")
+    p.set_defaults(func=cmd_report)
 
     p = sub.add_parser("worlds", help="list world files")
     p.set_defaults(func=cmd_worlds)

@@ -101,7 +101,7 @@ ticks_per_day = 4       # watches
 days_per_year = 360
 start_hour = 6          # the first watch is dawn
 seasons = true
-save_every_ticks = 4    # save once a simulated day (a crash loses at most a day; resume is exact)
+save_every_ticks = 4    # save once a simulated day with the LLM (rules only: every 10 days); resume is exact
 
 [rules]
 # Lives in years (all durations are in days).

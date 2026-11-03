@@ -7,7 +7,7 @@ interface Person { id: number; name: string; x: number; y: number; ideas: number
 interface MapData {
   width: number; height: number; tiles: string[]; clock: string; years: number[];
   food: { id: number; x: number; y: number; quantity: number }[];
-  structures: { x: number; y: number }[]; valleys: { name: string; x: number; y: number }[]; people: Person[];
+  structures: { x: number; y: number }[]; paths?: [number, number][]; valleys: { name: string; x: number; y: number }[]; people: Person[];
 }
 interface YearData { year: number; people: Person[]; fights: { x: number; y: number }[] }
 
@@ -36,6 +36,9 @@ export default function WorldMap() {
     data.tiles.forEach((row, y) => [...row].forEach((code, x) => {
       ctx.fillStyle = TERRAIN[code] ?? "#888"; ctx.fillRect(x * T, y * T, T, T);
     }));
+    (data.paths ?? []).forEach(([x, y]) => { // S2.1: worn paths
+      ctx.fillStyle = "#c8b07a"; ctx.fillRect(x * T + T * 0.3, y * T + T * 0.3, T * 0.4, T * 0.4);
+    });
     if (layers.food) data.food.forEach((f) => {
       ctx.fillStyle = f.quantity > 0 ? "#c0392b" : "#6d4c41";
       ctx.beginPath(); ctx.arc(f.x * T + T / 2, f.y * T + T / 2, T * 0.45, 0, 7); ctx.fill();

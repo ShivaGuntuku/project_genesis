@@ -11,12 +11,16 @@ most of a valley's indirect exchanges over a season, a **currency** has emerged:
 it with a word of their own, and from then on prices in it are recorded.
 """
 
+# Offer.give is None exactly when offer.promise is true; mypy can't see that narrowing.
+# mypy: disable-error-code="arg-type, assignment"
+
 import json
 import math
 from dataclasses import dataclass
 
 from genesis.culture import inventions as inv
-from genesis.culture.materials import MATERIALS, SOLVES
+from genesis.culture.materials import MATERIALS  # what looks pretty (Stage 1's table)
+from genesis.culture.tech import SOLVES, is_made
 from genesis.culture.words import is_valley_word
 from genesis.history import events as ev
 
@@ -74,8 +78,8 @@ def room_for(agent, good: str, n: int, rules) -> bool:
         )
     if good == "water":
         return agent.inventory.get("water", 0) + n <= agent.carry_capacity("water", rules)
-    if good in MATERIALS:
-        return inv.carrying_materials(agent) + n <= rules.materials_capacity
+    if inv.is_material(good, rules):
+        return inv.carrying_materials(agent) + n <= inv.materials_room(agent, rules)
     return True
 
 
@@ -85,7 +89,7 @@ def move(giver, receiver, good: str, n: int, ctx):
         units = n * (r.food_per_meal if good == "food" else 1)
         giver.inventory[good] -= units
         receiver.inventory[good] = receiver.inventory.get(good, 0) + units
-    elif good in MATERIALS:
+    elif inv.is_material(good, r):
         giver.materials[good] -= n
         if giver.materials[good] <= 0:
             del giver.materials[good]
@@ -95,7 +99,7 @@ def move(giver, receiver, good: str, n: int, ctx):
         for _ in range(n):
             item = next(i for i in giver.items if i["concept"] == cid)
             giver.items.remove(item)
-            receiver.items.append(item)
+            inv.add_item(receiver, item, ctx.world.concepts, r, trim=False)  # trimmed after
         inv.refresh_bonus(giver, ctx.world.concepts)
         inv.refresh_bonus(receiver, ctx.world.concepts)
 
@@ -109,6 +113,8 @@ def label(good: str, concepts, n: int = 1) -> str:
         c = concepts.get(int(good.split(":")[1]))
         name = c.name if c else "thing"
         return f"{n} {name}" + (f" (it {c.function})" if c else "")
+    if is_made(good):  # S2.2: a made material
+        return f"{n} {inv.material_name(good, concepts)}"
     return f"{n} {good}"
 
 
@@ -130,7 +136,7 @@ def use_value(agent, good: str, ctx) -> float:
         return max(0.05, 0.3 + 2.0 * agent.hunger / 100 - 0.25 * have)
     if good == "water":
         return max(0.05, 0.3 + 2.0 * agent.thirst / 100 - 0.4 * have)
-    if good in MATERIALS:
+    if inv.is_material(good, ctx.world.rules):
         v = 0.05
         if pretty(good):  # people like to have pretty things (the ambitious more)
             v = max(v, 0.2 + 0.6 * agent.genome.ambition - 0.2 * have)
@@ -309,6 +315,9 @@ def trade(ctx, speaker, listener, offer: Offer, reply_to=None, voice=None):
     if accepted is None:
         accepted = accepts(ctx, listener, speaker, offer)
     accepted = accepted and feasible(ctx, speaker, listener, offer)
+    if accepted:  # S2.2: much trading is hard to keep track of
+        for x in (speaker, listener):
+            inv.trouble(x, ctx.world.rules, "counting trades", 0.2)
 
     region = region_of(ctx.world, speaker.position)
     indirect = False
@@ -346,6 +355,8 @@ def trade(ctx, speaker, listener, offer: Offer, reply_to=None, voice=None):
             move(speaker, listener, offer.give, offer.n, ctx)
             if indirect:
                 ctx.world.economy["indirect"].append([ctx.tick, region, offer.give, listener.id])
+        for x in (speaker, listener):  # S2.2: a kit too full after the trade leaves one
+            inv.trim_items(x, ctx.world.concepts, r)
         speaker._practice("persuasion", 0.5, ctx.world, ctx.tick, ctx.log)
         feel(ctx, listener, speaker, "traded", reply_id)
         feel(ctx, speaker, listener, "gift" if offer.promise else "traded", reply_id)
@@ -390,6 +401,7 @@ def repay_due(ctx, debtor, creditor):
         if use_value(debtor, good, ctx) >= 1.5:
             continue  # they need it badly themselves; later
         move(debtor, creditor, good, 1, ctx)
+        inv.trim_items(creditor, ctx.world.concepts, ctx.world.rules)
         debtor.owes.remove(debt)
         what = label(good, ctx.world.concepts)
         event_id = say(

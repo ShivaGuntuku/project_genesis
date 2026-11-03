@@ -66,6 +66,7 @@ class Runner:
         self.publish = None  # set by the server: publish(dict) from this thread
         self.error: Exception | None = None
         self.stop_reason = "viewer closed"
+        self._control_paused = False  # paused by `genesis pause` (not by the user's button)
 
     # --------------------------------
 
@@ -89,8 +90,24 @@ class Runner:
         self.ready.set()
 
         pending, last_sent = [], 0.0
+        from genesis.simulation import service
+
+        if service._read_control(self.path) == "stop":  # a stop asked of an earlier run
+            service.control(self.path, "run")
+        checked = 0.0
         try:
             while not self.stop.is_set():
+                now = time.monotonic()
+                if now - checked > 1:  # S2.0: `genesis pause/continue` reach the viewer too
+                    checked = now
+                    command = service._read_control(self.path)
+                    if command == "pause" and not self.paused:
+                        self.paused = True
+                        self._send({"type": "status", "paused": True, "speed": self.speed})
+                    elif command == "run" and self._control_paused:
+                        self.paused = False
+                        self._send({"type": "status", "paused": False, "speed": self.speed})
+                    self._control_paused = command == "pause"
                 step = self._apply_commands()
                 if self.paused and not step:
                     time.sleep(0.03)
@@ -99,7 +116,10 @@ class Runner:
                 started = time.monotonic()
                 with self.lock:
                     first_new = sim.log.next_id
+                    land_before = sim.world.land_version
                     sim.tick()
+                    if sim.world.land_version != land_before:  # S2.1: redraw the land first
+                        self._send({"type": "land", **views.land_info(sim.world)})
                     if sim.tick_count % sim.config.save_every_ticks == 0 or step or self.paused:
                         store.save(sim)
                     new = [e for e in sim.log.recent if e.id >= first_new]

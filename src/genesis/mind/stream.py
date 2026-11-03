@@ -456,6 +456,25 @@ def forget(stream: MemoryStream, now: int, rules, calendar=None) -> tuple[list[M
     return old_small, summaries
 
 
+def trim(stream: MemoryStream, rules) -> list[Memory]:
+    """Keep a mind to `memory_cap` memories and `belief_cap` beliefs: beyond them the least
+    important memories go first (the oldest of equals), and the oldest beliefs. Big life events
+    rank highest, so they stay. Returns what was forgotten."""
+    out: list[Memory] = []
+    if rules.belief_cap:
+        beliefs = [m for m in stream.items if m.kind == BELIEF]
+        out += beliefs[: max(0, len(beliefs) - rules.belief_cap)]
+    if rules.memory_cap:
+        rest = [m for m in stream.items if m.kind != BELIEF]
+        if len(rest) > rules.memory_cap:
+            ranked = sorted(rest, key=lambda m: (m.importance, m.tick, m.id))
+            out += ranked[: len(rest) - rules.memory_cap]
+    if out:
+        gone = {m.id for m in out}
+        stream.items = [m for m in stream.items if m.id not in gone]
+    return out
+
+
 def _short(text: str, limit: int = 70) -> str:
     text = text.split(': "')[0]  # drop quoted words; the gist is enough
     return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"

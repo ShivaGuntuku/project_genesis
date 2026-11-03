@@ -20,6 +20,23 @@ def leashes(agent, world) -> list:
     return out
 
 
+def leash_grids(agent, world) -> list:
+    """The leashes as [(steps to the nearest known spot, for every tile), limit] (S2.6.6)."""
+    r = world.rules
+    if not r.explore_leash:
+        return []
+    out = []
+    for resource, level, rate in (
+        ("water", agent.thirst, r.thirst_per_tick),
+        ("food", agent.hunger, r.hunger_per_tick),
+    ):
+        if rate > 0 and any(k.resource_type == resource for k in agent.memory.known_locations):
+            hours = max(0.0, r.urgent_threshold - level) / rate
+            grid = agent.memory.near_grid(resource, world.width, world.height)
+            out.append((grid, max(3, int(hours / 2))))
+    return out
+
+
 def within_leash(agent, world, target) -> bool:
     return all(
         min(target.distance(p) for p in spots) <= limit for spots, limit in leashes(agent, world)
@@ -43,7 +60,7 @@ class NavigationPlanner:
 
         gx, gy = goal.x, goal.y
         adjacent_of = world.adjacent
-        came_from = {start: None}
+        came_from: dict[Position, Position | None] = {start: None}
         cost = {start: 0}
         order = 0
         frontier = [(abs(start.x - gx) + abs(start.y - gy), 0, order, start)]
@@ -70,7 +87,7 @@ class NavigationPlanner:
 
         path = [goal]
         while path[-1] != start:
-            path.append(came_from[path[-1]])
+            path.append(came_from[path[-1]])  # type: ignore[arg-type]
         path.reverse()
         return path
 
@@ -104,11 +121,8 @@ class ExplorationPlanner:
             gain = table[x1 + 1, y1 + 1] - table[x0, y1 + 1] - table[x1 + 1, y0] + table[x0, y0]
             walkable = _walkable_grid(world)[gx, gy]
             ok = walkable & (gain > 0) & ~((gx == origin.x) & (gy == origin.y))
-            for spots, limit in leashes(agent, world):  # M8e: never too far to get back
-                near = np.full(gx.shape, 10**6)
-                for p in spots:
-                    near = np.minimum(near, np.abs(gx - p.x) + np.abs(gy - p.y))
-                ok &= near <= limit
+            for near, limit in leash_grids(agent, world):  # M8e: never too far to get back
+                ok &= near[gx, gy] <= limit
             if ok.any():
                 score = gain - 1.5 * (np.abs(gx - origin.x) + np.abs(gy - origin.y))
                 score = np.where(ok, score, -np.inf)
@@ -119,7 +133,7 @@ class ExplorationPlanner:
 
         # Nothing unseen nearby: head for the closest unseen walkable tile anywhere (that is
         # within the leash).
-        return self._nearest_unseen(origin, world, memory, leashes(agent, world))
+        return self._nearest_unseen(origin, world, memory, leash_grids(agent, world))
 
     @staticmethod
     def _unseen_table(world, memory):
@@ -155,18 +169,11 @@ class ExplorationPlanner:
         import numpy as np
 
         unseen = _walkable_grid(world) & ~memory.seen_grid(world.width, world.height)
+        for near, limit in limits:  # (steps to the nearest known spot, limit) per need
+            unseen &= near <= limit
         xs, ys = np.nonzero(unseen)  # in (x, y) order
         if not len(xs):
             return None
-        keep = np.ones(len(xs), dtype=bool)
-        for spots, limit in limits:
-            near = np.full(len(xs), 10**6)
-            for p in spots:
-                near = np.minimum(near, np.abs(xs - p.x) + np.abs(ys - p.y))
-            keep &= near <= limit
-        if not keep.any():
-            return None
-        xs, ys = xs[keep], ys[keep]
         i = int(np.argmin(np.abs(xs - origin.x) + np.abs(ys - origin.y)))  # first of equals
         return Position(int(xs[i]), int(ys[i]))
 

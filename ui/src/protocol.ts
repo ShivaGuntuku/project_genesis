@@ -78,8 +78,19 @@ export interface WorldInfo {
   width: number;
   height: number;
   tiles: string[]; // one string per row; p=plains f=forest m=mountain w=water k=peak
+  lakes?: number[]; // lake number of each tile, row by row (0 = not water)
   food: { id: number; x: number; y: number; max: number }[];
+  paths?: [number, number][]; // S2.1: worn paths
   start_hour: number;
+}
+
+// S2.1: the living land changed (sent before the frame that uses the new patches).
+export interface LandUpdate {
+  type: "land";
+  tiles: string[];
+  lakes: number[];
+  food: { id: number; x: number; y: number; max: number }[];
+  paths: [number, number][];
 }
 
 export interface Snapshot {
@@ -99,7 +110,7 @@ export interface Status {
   message?: string;
 }
 
-export type ServerMessage = Snapshot | Frame | Status;
+export type ServerMessage = Snapshot | Frame | Status | LandUpdate;
 
 export interface Relation {
   id: number;

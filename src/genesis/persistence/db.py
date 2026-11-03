@@ -17,12 +17,13 @@ from genesis.config import WorldConfig
 from genesis.history import events as ev
 from genesis.history.events import Event, EventLog
 from genesis.mind.stream import Memory
+from genesis.persistence import compact
 from genesis.simulation.engine import Simulation
 from genesis.society.groups import Group
 from genesis.society.relationships import Relationship
 
-SCHEMA_VERSION = 10
-UPGRADABLE = {4, 5, 6, 7, 8, 9}  # older formats that `load()` upgrades in place
+SCHEMA_VERSION = 12
+UPGRADABLE = {4, 5, 6, 7, 8, 9, 10, 11}  # older formats that `load()` upgrades in place
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -153,7 +154,8 @@ CREATE TABLE IF NOT EXISTS groups (
 CREATE TABLE IF NOT EXISTS concepts (
     id INTEGER PRIMARY KEY, name TEXT NOT NULL, function TEXT NOT NULL,
     functions_json TEXT NOT NULL, recipe_json TEXT NOT NULL, inventor_id INTEGER NOT NULL,
-    tick INTEGER NOT NULL, description TEXT NOT NULL, same_as INTEGER, lost_tick INTEGER
+    tick INTEGER NOT NULL, description TEXT NOT NULL, same_as INTEGER, lost_tick INTEGER,
+    parent INTEGER  -- S2.2: the idea this one improves on or grew out of
 );
 CREATE TABLE IF NOT EXISTS structures (
     id INTEGER PRIMARY KEY, concept_id INTEGER NOT NULL, x INTEGER NOT NULL, y INTEGER NOT NULL,
@@ -179,7 +181,8 @@ CREATE TABLE IF NOT EXISTS runs (
     id INTEGER PRIMARY KEY, started_at TEXT NOT NULL, ended_at TEXT,
     from_tick INTEGER NOT NULL, to_tick INTEGER, end_reason TEXT
 );
-"""
+-- S2.0.7: old routine messages and needs, folded into daily counts (see compact.py).
+""" + "".join(sql + ";\n" for sql in compact.SCHEMAS)
 
 
 LLM_COLUMNS = (
@@ -232,6 +235,7 @@ def _rng_from_json(text: str):
 class WorldStore:
     def __init__(self, path: str | Path, readonly: bool = False):
         self.path = Path(path)
+        self._folded_to: int | None = None  # S2.0.7: history folded up to this tick
         if readonly:  # for viewers: never writes, never blocks the running world
             self.conn = sqlite3.connect(f"file:{self.path}?mode=ro", uri=True)
             self.conn.row_factory = sqlite3.Row
@@ -297,6 +301,9 @@ class WorldStore:
                     disaster_events=json.dumps(sim.world.disaster_events, sort_keys=True),
                     peak_population=sim.world.peak_population,
                     god=json.dumps(getattr(sim.world, "god", {}), sort_keys=True),
+                    land=json.dumps(sim.world.land.to_dict() if sim.world.land else {}),
+                    research=json.dumps(sim.world.research, sort_keys=True),  # S2.3
+                    culture=json.dumps(sim.world.culture, sort_keys=True),  # S2.4
                     saved_at=_now(),
                 )
                 self.conn.executemany(
@@ -532,8 +539,8 @@ class WorldStore:
                 )
                 self.conn.executemany(
                     """INSERT INTO concepts (id, name, function, functions_json, recipe_json,
-                           inventor_id, tick, description, same_as, lost_tick)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                           inventor_id, tick, description, same_as, lost_tick, parent)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                        ON CONFLICT(id) DO UPDATE SET lost_tick = excluded.lost_tick""",
                     [
                         (
@@ -547,6 +554,7 @@ class WorldStore:
                             c.description,
                             c.same_as,
                             c.lost_tick,
+                            c.parent,
                         )
                         for c in sim.concepts.values()
                     ],
@@ -572,6 +580,7 @@ class WorldStore:
                     [(y, a, json.dumps(d, sort_keys=True)) for y, a, d in yearly],
                 )
                 self.conn.execute("DELETE FROM llm_journal WHERE tick < ?", (sim.tick_count,))
+                self._fold(sim)
             sim.last_save_tick = sim.tick_count
         except Exception:
             sim.log.pending[:0] = events  # not saved: keep them for the next attempt
@@ -615,7 +624,19 @@ class WorldStore:
 
         from genesis.god import interventions as god  # M9: what God changed stays changed
 
-        god.restore(sim, json.loads(meta.get("god", "{}")))
+        god_state = json.loads(meta.get("god", "{}"))
+        if isinstance(god_state.get("causes"), list):  # saved by a bug: rebuild from the log
+            god_state["causes"] = self._god_causes()
+        god.restore(sim, god_state)
+        research = json.loads(meta.get("research") or "{}")  # S2.3: lore found, records
+        if research:
+            sim.world.research = research
+        culture = json.loads(meta.get("culture") or "{}")  # S2.4: shared ideas
+        if culture:
+            culture["ideas"] = {int(k): v for k, v in culture["ideas"].items()}
+            sim.world.culture = culture
+        if sim.world.land is not None:  # S2.1: the land as it has become
+            sim.world.land.restore(sim.world, json.loads(meta.get("land") or "{}"))
         quantities = {
             r["id"]: r["quantity"] for r in self.conn.execute("SELECT id, quantity FROM resources")
         }
@@ -676,7 +697,11 @@ class WorldStore:
                     description=r["description"],
                     same_as=r["same_as"],
                     lost_tick=r["lost_tick"],
+                    parent=r["parent"],
                 )
+            from genesis.culture import inventions
+
+            inventions.restore_props(sim.concepts)  # S2.2: made materials, from their recipes
             for r in self.conn.execute("SELECT * FROM structures ORDER BY id"):
                 sim.structures.append(
                     {
@@ -735,6 +760,9 @@ class WorldStore:
             columns = {r[1] for r in self.conn.execute("PRAGMA table_info(relationships)")}
             if "grudge_event_id" not in columns:  # 6 -> 7
                 self.conn.execute("ALTER TABLE relationships ADD COLUMN grudge_event_id INTEGER")
+            columns = {r[1] for r in self.conn.execute("PRAGMA table_info(concepts)")}
+            if "parent" not in columns:  # 11 -> 12 (S2.2)
+                self.conn.execute("ALTER TABLE concepts ADD COLUMN parent INTEGER")
             self._set_meta(schema_version=SCHEMA_VERSION)
 
     def start_run(self, tick: int) -> int:
@@ -742,7 +770,7 @@ class WorldStore:
             cur = self.conn.execute(
                 "INSERT INTO runs (started_at, from_tick) VALUES (?, ?)", (_now(), tick)
             )
-        return cur.lastrowid
+        return cur.lastrowid  # type: ignore[return-value]
 
     def end_run(self, run_id: int, tick: int, reason: str):
         with self.conn:
@@ -770,7 +798,8 @@ class WorldStore:
     ) -> list[Event]:
         """Most recent events first."""
         sql = "SELECT e.* FROM events e"
-        where, params = [], []
+        where: list[str] = []
+        params: list = []
 
         if agent_id is not None:
             sql += " JOIN event_agents ea ON ea.event_id = e.id"
@@ -864,7 +893,8 @@ class WorldStore:
         """Recorded model calls, most recent first."""
         if not self._has_table("llm_calls"):
             return []
-        where, params = [], []
+        where: list[str] = []
+        params: list = []
         if agent_id is not None:
             where.append("(agent_id = ? OR other_id = ?)")
             params += [agent_id, agent_id]
@@ -937,6 +967,40 @@ class WorldStore:
         return {r["id"]: r["name"] for r in self.conn.execute("SELECT id, name FROM agents")}
 
     # --------------------------------
+
+    def _god_causes(self) -> dict[str, int]:
+        """God's disasters and the interventions that made them, from the event log (repairs
+        files where a bug saved them as a bare list)."""
+        out = {}
+        for event_id, data in self.conn.execute(
+            "SELECT id, data_json FROM events WHERE type = ? ORDER BY id", (ev.INTERVENTION,)
+        ):
+            d = json.loads(data)
+            if d.get("act") == "disaster" and d.get("id") is not None:
+                out[str(d["id"])] = event_id
+        return out
+
+    def _fold(self, sim: Simulation):
+        """S2.0.7: fold old routine messages and daily metrics (inside the save's transaction).
+        The newest events (those a resume loads) are never folded."""
+        if self._folded_to is None:
+            row = self.conn.execute("SELECT value FROM meta WHERE key = 'folded_to'").fetchone()
+            self._folded_to = int(row[0]) if row else 0
+        upto = compact.due(self._folded_to, sim.tick_count, sim.world.calendar)
+        if upto is None:
+            return
+        keep_after = sim.log.next_id - 1 - sim.log.max_recent
+        self.conn.execute("SAVEPOINT fold")
+        try:
+            compact.fold(self.conn, self._folded_to, upto, sim.world.calendar, keep_after)
+            self._set_meta(folded_to=upto)
+        except sqlite3.Error as e:  # never let folding stop a day's save
+            self.conn.execute("ROLLBACK TO fold")
+            print(f"[genesis] history not folded this time: {e}", flush=True)
+        else:
+            self._folded_to = upto
+        finally:
+            self.conn.execute("RELEASE fold")
 
     def _set_meta(self, **values):
         self.conn.executemany(

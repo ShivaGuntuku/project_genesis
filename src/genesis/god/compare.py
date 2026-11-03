@@ -6,6 +6,8 @@ import sqlite3
 from collections import Counter
 from pathlib import Path
 
+from genesis.persistence.compact import folded_messages
+
 
 def branch(source: Path, target: Path, name: str):
     """A copy of the world file as it was last saved, under a new name."""
@@ -50,6 +52,7 @@ def summary(path: Path) -> dict:
         tpd = config.get("ticks_per_day", 24)
         ev = Counter(r[0] for r in conn.execute("SELECT type FROM events"))
         acts = Counter(r[0] for r in conn.execute("SELECT act FROM messages"))
+        acts += folded_messages(conn)  # S2.0.7: old routine messages kept as counts
         alive = conn.execute("SELECT COUNT(*) FROM agents WHERE alive = 1").fetchone()[0]
         causes = Counter(
             r[0] for r in conn.execute("SELECT cause_of_death FROM agents WHERE alive = 0")

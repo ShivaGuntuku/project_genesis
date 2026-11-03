@@ -22,7 +22,7 @@ from genesis.history import events as ev
 
 def parse_seeds(text: str) -> list[int]:
     """'1-4' or '1,3,7' or '5'."""
-    out = []
+    out: list = []
     for part in text.split(","):
         a, _, b = part.strip().partition("-")
         out.extend(range(int(a), int(b) + 1) if b else [int(a)])
@@ -32,7 +32,7 @@ def parse_seeds(text: str) -> list[int]:
 def parse_arm(text: str) -> tuple[str, dict]:
     """'no trade: trade=0, goals=0' -> ('no trade', {'trade': 0, 'goals': 0})."""
     name, _, rest = text.partition(":")
-    settings = {}
+    settings: dict[str, int | float] = {}
     for part in filter(None, (p.strip() for p in rest.split(","))):
         key, _, value = part.partition("=")
         value = value.strip()
@@ -59,7 +59,8 @@ def run_one(job: dict) -> dict:
         attach(sim)
     started = time.time()
     year_ticks = sim.world.calendar.ticks(days=sim.world.calendar.days_per_year)
-    years, counts_before = [], {}
+    years: list = []
+    counts_before: dict = {}
     for year in range(1, job["years"] + 1):
         sim.run(year_ticks)
         sim.log.pending.clear()  # counts are kept in log.counts; free the memory
@@ -130,7 +131,7 @@ def run_one(job: dict) -> dict:
 def run(config_path, seeds, years, arms, llm=False, workers=4, out=None, echo=print) -> dict:
     toml = Path(config_path).read_text()
     WorldConfig.from_toml(toml)  # fail early on a bad config
-    plan = [("base", {}, llm)]
+    plan: list[tuple[str, dict, bool]] = [("base", {}, llm)]
     if llm:
         plan.append(("rules-only control", {}, False))
     plan += [(name, settings, False) for name, settings in arms]

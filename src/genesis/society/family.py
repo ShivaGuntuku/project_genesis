@@ -446,7 +446,13 @@ def grieve(ctx, died_event):
         rel = relation(other, dead, ctx.agents)
         if rel is None:
             continue
-        other.energy = max(0, other.energy - r.grief_energy_loss)
+        loss = r.grief_energy_loss
+        if r.culture:  # S2.4: mourning together softens grief
+            from genesis.culture import ideas
+
+            if ideas.mourns_together(other, ctx.world):
+                loss *= 0.5
+        other.energy = max(0, other.energy - loss)
         widowed = other.partner == dead.id
         if widowed:
             other.partner = None

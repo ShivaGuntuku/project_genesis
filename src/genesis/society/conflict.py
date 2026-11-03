@@ -87,6 +87,7 @@ def fight(ctx, attacker, defender, reply_to=None, voice=None, cause=None):
             + 0.5 * x.abilities.get("combat")
             + 0.1 * min(1, x.bonus.get("cuts", 0))  # tools (M8b)
             + 0.25 * min(1, x.bonus.get("reaches", 0))
+            + 0.15 * min(1, x.bonus.get("pierces", 0))  # S2.2
             + 0.15 * len(sides[x.id])
             + 0.25 * (r.talents and x.talent == "strong-armed")  # M8d
             + ctx.rng.gauss(0, r.fight_luck)
@@ -147,6 +148,10 @@ def fight(ctx, attacker, defender, reply_to=None, voice=None, cause=None):
         from genesis.culture import inventions
 
         inventions.lost_a_fight(loser)
+        for x in (attacker, defender):  # S2.2: weapons wear in a fight
+            for key in ("cuts", "reaches", "pierces"):
+                if x.bonus.get(key):
+                    inventions.wear(ctx, x, key)
     if loser.health <= 0:
         loser._die(ctx.tick, ctx.log, "killed", fight_id)
     return fight_id

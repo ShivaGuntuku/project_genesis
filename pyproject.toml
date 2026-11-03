@@ -26,6 +26,7 @@ genesis = "genesis.cli:main"
 [dependency-groups]
 dev = [
     "httpx>=0.28.1",
+    "mypy>=2.4.1",
     "pytest>=8",
     "ruff>=0.6",
 ]
@@ -49,3 +50,23 @@ extend-exclude = ["tools"]
 
 [tool.ruff.lint]
 select = ["E", "F", "B", "I"]
+
+[tool.mypy]
+# The simulation core is type-checked in CI; the CLI and web servers are not (yet).
+python_version = "3.12"
+mypy_path = "src"
+packages = [
+    "genesis.agents",
+    "genesis.config",
+    "genesis.culture",
+    "genesis.god",
+    "genesis.history",
+    "genesis.llm",
+    "genesis.mind",
+    "genesis.persistence",
+    "genesis.simulation",
+    "genesis.society",
+    "genesis.world",
+]
+ignore_missing_imports = true
+disable_error_code = ["annotation-unchecked"]

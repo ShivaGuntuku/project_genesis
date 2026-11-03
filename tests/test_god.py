@@ -100,6 +100,34 @@ def test_a_sent_disaster_strikes_and_its_cause_is_god(tmp_path):
     assert any(e.type == ev.FELL_SICK for e in sim.log.pending)
 
 
+def test_a_world_with_a_sent_disaster_loads_again_and_again(tmp_path):
+    """Regression: loading turned God's `causes` into a list, so the next load crashed."""
+    import json
+
+    path = world_file(tmp_path)
+    store, sim = load(path)
+    event = god.apply(sim, {"act": "disaster", "kind": "wildfire", "region": "all", "days": 5})
+    sim.run(4 * 2)
+    store.save(sim)
+    store.close()
+    for _ in range(3):  # load, run, save: three times over
+        store, sim = load(path)
+        assert sim.world.god_causes == {god.GOD_DISASTER_IDS + 1: event}
+        sim.run(4)
+        store.save(sim)
+        store.close()
+
+    # A file the bug already damaged (causes saved as a bare list) is repaired from the log.
+    store = WorldStore(path)
+    saved = json.loads(store.meta()["god"])
+    saved["causes"] = list(saved["causes"])
+    store._set_meta(god=json.dumps(saved))
+    store.conn.commit()
+    sim = store.load()
+    store.close()
+    assert sim.world.god_causes == {god.GOD_DISASTER_IDS + 1: event}
+
+
 def test_migrants_arrive_strike_kills_and_a_whisper_is_remembered(tmp_path):
     path = world_file(tmp_path)
     store, sim = load(path)

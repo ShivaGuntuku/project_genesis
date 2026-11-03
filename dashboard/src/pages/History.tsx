@@ -7,8 +7,13 @@ interface Valley { people: number; ideas: number; currency: string | null }
 interface Year { year: number; valleys: Record<string, Valley>; apart: number; concepts: number; lost: number }
 interface Disaster { year: number; kind: string; region: string; days: number; people: number; text: string }
 interface Leak { year: number; words: number; earth: number; perThousand: number }
+interface LandValley { woods: number; patches: number; born: number; died: number }
+interface Land {
+  year: number; woods: number; water: number; waterMin: number; waterMax: number; patches: number;
+  ponds: number; paths: number; climate: number; valleys: Record<string, LandValley>;
+}
 interface HistoryData {
-  years: Year[]; disasters: Disaster[]; migrations: { year: number; count: number }[]; leaks: Leak[]; valleys: string[];
+  years: Year[]; disasters: Disaster[]; land?: Land[]; migrations: { year: number; count: number }[]; leaks: Leak[]; valleys: string[];
 }
 
 export default function History() {
@@ -24,6 +29,13 @@ export default function History() {
     data: ys.map((y) => [y.year, Number(y.valleys[v]?.[k] ?? 0)] as [number, number]),
   }));
   const last = ys[ys.length - 1];
+  const land = (data.land ?? []).filter((y) => y.year >= from && y.year <= to);
+  const nowLand = land[land.length - 1];
+  const perLand = (k: keyof LandValley) => valleys.map((v, i) => ({
+    name: v, color: series(i + 1),
+    data: land.map((y) => [y.year, Number(y.valleys[v]?.[k] ?? 0)] as [number, number]),
+  }));
+  const climate = (c: number) => (c > 0.3 ? "wet" : c < -0.3 ? "dry" : "mild") + ` (${c.toFixed(2)})`;
   const words = data.leaks.reduce((a, l) => a + l.words, 0);
   const earth = data.leaks.reduce((a, l) => a + l.earth, 0);
   return (
@@ -67,6 +79,42 @@ export default function History() {
             <Card title="Leak rate by year" hint="words from our world per 1,000 they say or believe">
               <ColumnChart loading={loading} xName="year" bars={[{ name: "per 1,000 words", color: series(2),
                 data: data.leaks.map((l) => [l.year, l.perThousand] as [number, number]) }]} />
+            </Card>
+          </div>
+        </>
+      )}
+      {land.length > 0 && (
+        <>
+          <h2 style={{ marginTop: 18 }}>The land</h2>
+          <p className="sub">
+            Woods spread and die back, lakes rise in the wet season and shrink in the dry, berry patches seed new
+            ones and die when stripped bare, and much-walked ground becomes paths.
+            {nowLand && <> Now: {nowLand.woods} wooded tiles, {nowLand.patches} berry patches, {nowLand.ponds} ponds,
+              {" "}{nowLand.paths} paths; the climate is {climate(nowLand.climate)}.</>}
+          </p>
+          <div className="grid two" style={{ marginTop: 14 }}>
+            <Card title="Woods and water" hint="tiles; water at its lowest and highest that year">
+              <LineChart loading={loading} xName="year" lines={[
+                { name: "woods", color: series(3), data: land.map((y) => [y.year, y.woods] as [number, number]) },
+                { name: "water (low)", color: series(1), data: land.map((y) => [y.year, y.waterMin] as [number, number]) },
+                { name: "water (high)", color: series(2), data: land.map((y) => [y.year, y.waterMax] as [number, number]) },
+              ]} />
+            </Card>
+            <Card title="Berry patches in each valley" hint="patches that bear fruit now">
+              <LineChart loading={loading} xName="year" lines={perLand("patches")} />
+            </Card>
+          </div>
+          <div className="grid two" style={{ marginTop: 14 }}>
+            <Card title="Woods in each valley" hint="wooded tiles">
+              <LineChart loading={loading} xName="year" lines={perLand("woods")} />
+            </Card>
+            <Card title="Patches born and lost" hint="over the years shown">
+              <table className="data"><thead><tr><th>Valley</th><th className="num">Born</th><th className="num">Lost</th></tr></thead>
+                <tbody>{valleys.map((v) => (
+                  <tr key={v}><td>{v}</td>
+                    <td className="num">{land.reduce((a, y) => a + (y.valleys[v]?.born ?? 0), 0)}</td>
+                    <td className="num">{land.reduce((a, y) => a + (y.valleys[v]?.died ?? 0), 0)}</td></tr>
+                ))}</tbody></table>
             </Card>
           </div>
         </>

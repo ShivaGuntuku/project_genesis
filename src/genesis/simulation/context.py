@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
 from random import Random
+from typing import Any
 
 from genesis.history.events import EventLog
 
@@ -8,14 +9,14 @@ from genesis.history.events import EventLog
 class TickContext:
     """Everything an agent may use while acting in one tick."""
 
-    world: object
+    world: Any
     tick: int
     log: EventLog
     rng: Random
     agents: dict = field(default_factory=dict)  # id -> Agent
     # (tick, source_id, target_id, dimension, old, new, event_id), saved with the tick
     relationship_history: list = field(default_factory=list)
-    mind: object = None  # None: the rules decide everything; else an LLM or replay mind
+    mind: Any = None  # None: the rules decide everything; else an LLM or replay mind
     llm_calls: list = field(default_factory=list)  # records of model calls, saved with the tick
     points: int = 0  # decision points so far this tick
     pregnancies: list = field(default_factory=list)  # the simulation's (shared, not a copy)

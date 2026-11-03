@@ -40,13 +40,32 @@ REPLY_LINES = {
 # =================================================================
 
 
+def land_info(world) -> dict:
+    """The land as it is now: tiles, lake numbers, berry patches and paths (S2.1: sent again
+    whenever the living land changes)."""
+    rows = [
+        "".join(TERRAIN_CODES[world.terrain[Position(x, y)].value] for x in range(world.width))
+        for y in range(world.height)
+    ]
+    lakes = [
+        world.lake_of.get(Position(x, y), 0)
+        for y in range(world.height)
+        for x in range(world.width)
+    ]
+    paths = sorted([p.x, p.y] for p in world.land.paths) if world.land is not None else []
+    return {
+        "tiles": rows,
+        "lakes": lakes,
+        "food": [
+            {"id": f.id, "x": f.position.x, "y": f.position.y, "max": f.max_quantity}
+            for f in world.food_sources
+        ],
+        "paths": paths,
+    }
+
+
 def snapshot(sim, paused: bool, speed: float) -> dict:
     world = sim.world
-    rows = []
-    for y in range(world.height):
-        rows.append(
-            "".join(TERRAIN_CODES[world.terrain[Position(x, y)].value] for x in range(world.width))
-        )
     names = {a.id: a.name for a in sim.population.agents}
     return {
         "type": "snapshot",
@@ -54,11 +73,7 @@ def snapshot(sim, paused: bool, speed: float) -> dict:
             "name": world.name,
             "width": world.width,
             "height": world.height,
-            "tiles": rows,
-            "food": [
-                {"id": f.id, "x": f.position.x, "y": f.position.y, "max": f.max_quantity}
-                for f in world.food_sources
-            ],
+            **land_info(world),
             "start_hour": sim.config.start_hour,
         },
         "agents": [agent_info(a, sim) for a in sim.population.agents],

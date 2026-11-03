@@ -20,7 +20,7 @@ def daily_metrics(sim) -> list[tuple[int, str, float]]:
     agents = sim.population.agents
     alive = [a for a in agents if a.alive]
 
-    rows = {
+    rows: dict[str, float] = {
         "population.alive": len(alive),
         "population.ever": len(agents),
         "births": sum(1 for a in agents if day_start <= a.born_tick < tick),
@@ -97,22 +97,29 @@ def friend_graph(sim):
     return graph
 
 
+COMMUNITY_EVERY_DAYS = 10
+
+
 def society(sim) -> dict:
     """Networks and groups (M7): communities of friends, the most connected person, groups."""
     from networkx.algorithms import community
 
-    rows = {}
+    rows: dict[str, float] = {}
     graph = friend_graph(sim)
     linked = [n for n in graph.nodes if graph.degree(n) > 0]
+    # S2.6.6: communities change slowly and are the costliest measure: every 10th day only.
+    tick = max(0, sim.tick_count - 1)
+    tenth = sim.world.calendar.day_index(tick) % COMMUNITY_EVERY_DAYS == 0
     if linked:
-        sub = graph.subgraph(linked)
-        groups_found = community.greedy_modularity_communities(sub, weight="weight")
-        rows["social.communities"] = len(groups_found)
+        if tenth:
+            sub = graph.subgraph(linked)
+            groups_found = community.greedy_modularity_communities(sub, weight="weight")
+            rows["social.communities"] = len(groups_found)
         centrality = _centrality(graph)
         top = max(sorted(centrality), key=lambda n: centrality[n])
         rows["social.most_connected_id"] = top
         rows["social.most_connected_score"] = centrality[top]
-    else:
+    elif tenth:
         rows["social.communities"] = 0
     rows["social.density"] = _density(graph)
 

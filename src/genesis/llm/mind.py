@@ -16,7 +16,9 @@ from M5, the nightly reflection (its own prompt, schema and parser).
 """
 
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import Any
 
 from genesis.culture.words import leak_words
 from genesis.llm import gateway as gw
@@ -84,11 +86,11 @@ class Question:
     """One call to the model, whatever its purpose."""
 
     kind: str
-    agent: object
-    other: object | None
-    prompt: object  # callable() -> str (built only when the model is really asked)
+    agent: Any
+    other: Any
+    prompt: Callable[[], str]  # built only when the model is really asked
     schema: dict
-    parse: object  # callable(text, record | None) -> result | None (None = invalid)
+    parse: Callable[[str, dict | None], Any]  # -> result | None (None = invalid)
     max_tokens: int = 150
     budgeted: bool = True  # reflection runs at night, outside the per-tick budget
 
@@ -125,8 +127,10 @@ class LLMMind:
             "skipped_budget": 0,
             "skipped_offline": 0,
             "skipped_rate": 0,
+            "skipped_pace": 0,
         }
         self.governor = Governor(config.max_calls_per_minute)
+        self.pace = Pace(getattr(config, "target_minutes_per_year", 0))
         self.journal = None  # M8.5: where each answer is written the moment it arrives
         self.recorded: dict = {}  # (tick, point) -> journal entry, replayed after a crash
 
@@ -195,6 +199,8 @@ class LLMMind:
         """Why this call is not made now (the rules decide instead), or None."""
         if q.budgeted and not self._within_budget(ctx, q.kind):
             return "skipped_budget"
+        if not self.pace.keep(ctx, q):
+            return "skipped_pace"
         if not self.gateway.available():
             return "skipped_offline"
         if not self.governor.allow(q.kind in IMPORTANT):
@@ -208,7 +214,7 @@ class LLMMind:
         return self.config.mind_model if q.kind in IMPORTANT else self.config.chat_model
 
     def _chat(self, ctx, index, q, prompt, model):
-        return self.gateway.chat(
+        reply = self.gateway.chat(
             model,
             prompts.SYSTEM,
             prompt,
@@ -217,6 +223,8 @@ class LLMMind:
             seed=call_seed(self.world_seed, ctx.tick, index),
             max_tokens=q.max_tokens,
         )
+        self.governor.record(reply.latency_ms / 1000)  # S2.6: how busy the model is
+        return reply
 
     def _record(self, ctx, index, q, model, prompt, reply) -> dict:
         return {
@@ -290,7 +298,13 @@ class Governor:
       *wait* for the next free slot (the simulation slows to the LLM's pace for a moment).
     So while there is enough to think about, the LLM runs between 90% and 100% of its maximum.
     With 0, there is no limit. Only real time decides whether a call is made; every call made
-    is recorded, so replays are exact."""
+    is recorded, so replays are exact.
+
+    S2.6: routine thoughts also wait for spare time. When the model spent 90% or more of the
+    last minute answering (measured from the calls' own time), they are left to the rules. A
+    count of calls alone stopped meaning "busy" once the server answers several at once."""
+
+    BUSY = 0.9
 
     def __init__(self, max_per_minute: int, clock=None, sleep=None):
         import collections
@@ -298,8 +312,20 @@ class Governor:
         self.max = max_per_minute
         self.clock = clock or time.monotonic
         self.sleep = sleep or time.sleep
-        self.calls = collections.deque()
+        self.calls: collections.deque[float] = collections.deque()
+        self.spent: collections.deque[tuple[float, float]] = collections.deque()  # (end, s)
         self.waited = 0.0  # seconds spent waiting for a slot (for the run summary)
+
+    def record(self, seconds: float):
+        """A call took this long (S2.6)."""
+        self.spent.append((self.clock(), seconds))
+
+    def busy(self) -> float:
+        """Share of the last minute the model spent answering."""
+        now = self.clock()
+        while self.spent and now - self.spent[0][0] >= 60:
+            self.spent.popleft()
+        return sum(s for _, s in self.spent) / 60
 
     def _expire(self, now):
         while self.calls and now - self.calls[0] >= 60:
@@ -308,6 +334,8 @@ class Governor:
     def allow(self, important: bool) -> bool:
         if self.max <= 0:
             return True
+        if not important and self.busy() >= self.BUSY:
+            return False  # no spare time for small talk
         now = self.clock()
         self._expire(now)
         if not important:
@@ -329,6 +357,58 @@ class Governor:
             return 0.0
         now = self.clock()
         return sum(1 for t in self.calls if now - t < 60) / self.max
+
+
+class Pace:
+    """Holds a real-time target (S2.6.5, doc 10.7): real minutes per simulated year.
+
+    Every 10 simulated days it compares the real time taken with the target. When the run is
+    slower, the share of plans and reflections asked of the model goes down (never below
+    20%); when it is faster, the share goes back up to all of them. Which ones are left to the
+    rules is decided from the tick and the person (no chance used), and every skip is written
+    to the journal like the governor's, so a resume and a replay follow the same history."""
+
+    PACED = ("plan", "reflect")
+    DAYS = 10
+    LOWEST = 0.2
+
+    def __init__(self, minutes_per_year: float, clock=None):
+        self.target = minutes_per_year
+        self.clock = clock or time.monotonic
+        self.share = 1.0
+        self.mark: tuple[int, float] | None = None
+        self.last_minutes: float | None = None  # measured real minutes per year
+
+    def update(self, ctx):
+        if self.target <= 0:
+            return
+        cal = ctx.world.calendar
+        now = self.clock()
+        if self.mark is None or ctx.tick < self.mark[0]:
+            self.mark = (ctx.tick, now)
+            return
+        start, then = self.mark
+        if ctx.tick - start < self.DAYS * cal.ticks_per_day:
+            return
+        years = (ctx.tick - start) / (cal.ticks_per_day * cal.days_per_year)
+        minutes = (now - then) / 60 / years
+        self.last_minutes = minutes
+        if minutes > 0:
+            change = (self.target / minutes) ** 0.5  # gently, so the share doesn't swing
+            self.share = min(1.0, max(self.LOWEST, self.share * change))
+        self.mark = (ctx.tick, now)
+
+    def keep(self, ctx, q) -> bool:
+        """Whether this question goes to the model (always, unless it is paced)."""
+        if self.target <= 0 or q.kind not in self.PACED:
+            return True
+        self.update(ctx)
+        if self.share >= 1:
+            return True
+        import zlib
+
+        draw = zlib.crc32(f"pace:{ctx.tick}:{q.agent.id}:{q.kind}".encode()) % 1000
+        return draw < self.share * 1000
 
 
 class ReplayMind:
@@ -428,7 +508,7 @@ def _decision(text: str, point: Point, max_chars: int, record: dict | None) -> D
         return None
 
     choice = answer.choice if keys else point.options[0].key if point.options else point.kind
-    say = answer.say
+    say: str | None = answer.say
     leaked = leak_words(say or "") + leak_words(answer.thought or "")
     if leaked:  # M8f: the choice stands, but words of our world are not spoken
         say = None
@@ -436,7 +516,7 @@ def _decision(text: str, point: Point, max_chars: int, record: dict | None) -> D
             record["error"] = "leak dropped: " + ", ".join(sorted(set(leaked)))
     if record is not None:
         record.update(choice=choice, say=say, thought=answer.thought)
-    return Decision(choice=choice, say=say, thought=answer.thought, call=record)
+    return Decision(choice=choice, say=say, thought=answer.thought, call=record)  # type: ignore[arg-type]
 
 
 def ask_many(mind, ctx, questions: list) -> list:

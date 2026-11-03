@@ -34,6 +34,10 @@ class LLMConfig:
     # M8.5: model workers asked at once for independent questions (plans, reflections). Ollama
     # must allow it: OLLAMA_NUM_PARALLEL >= workers. Results are the same as one by one.
     workers: int = 1
+    # S2.6.5 pacing (doc 10.7): real minutes per simulated year to hold (0 = off). When the
+    # run is slower, a share of plans and reflections is left to the rules (logged as
+    # "skipped_pace"), and given back when it catches up.
+    target_minutes_per_year: float = 0
 
     @classmethod
     def from_dict(cls, data: dict) -> "LLMConfig":
@@ -68,6 +72,8 @@ class LLMConfig:
             raise ValueError("llm.plan_every_days cannot be negative")
         if not 1 <= config.conversation_turns <= 8:
             raise ValueError("llm.conversation_turns must be 1-8")
+        if config.target_minutes_per_year < 0:
+            raise ValueError("llm.target_minutes_per_year cannot be negative")
         if config.timeout_seconds <= 0:
             raise ValueError("llm.timeout_seconds must be positive")
         return config

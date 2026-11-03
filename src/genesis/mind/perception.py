@@ -17,6 +17,10 @@ class Observation:
     visible_patches: list = field(default_factory=list)
     # Every tile inside the vision square (used to track explored area).
     visible_tiles: list = field(default_factory=list)
+    visible_set: frozenset = frozenset()  # the same tiles as a set (empty: build it)
+
+    def tile_set(self):
+        return self.visible_set or frozenset(self.visible_tiles)
 
 
 class PerceptionSystem:
@@ -31,19 +35,22 @@ class PerceptionSystem:
         min_x, max_x = max(0, px - r), min(world.width - 1, px + r)
         min_y, max_y = max(0, py - r), min(world.height - 1, py + r)
 
-        def in_view(p: Position) -> bool:
-            return min_x <= p.x <= max_x and min_y <= p.y <= max_y
-
-        tiles = [Position(x, y) for x in range(min_x, max_x + 1) for y in range(min_y, max_y + 1)]
-
-        visible_food = [
-            food
-            for food in world.food_sources
-            # Patches with less than a meal are not worth noticing.
-            if food.quantity >= world.rules.food_per_meal and in_view(food.position)
+        tiles, tile_set = _square(min_x, max_x, min_y, max_y)
+        meal = world.rules.food_per_meal
+        patches = [  # every food patch in view (S2.6.6: the comparisons inline)
+            f
+            for f in world.food_sources
+            if min_x <= f.position.x <= max_x and min_y <= f.position.y <= max_y
         ]
+        # Patches with less than a meal are not worth noticing.
+        visible_food = [f for f in patches if f.quantity >= meal]
 
-        visible_water = [p for p in tiles if world.can_drink_at(p)]
+        shore, dry = world.shore_lakes, world.dry_lakes  # what can_drink_at asks, inline
+        visible_water = [
+            p
+            for p in tiles
+            if (lakes := shore.get(p)) is not None and (not dry or bool(lakes - dry))
+        ]
 
         seek = world.rules.seek_threshold
         visible_agents = [
@@ -66,7 +73,10 @@ class PerceptionSystem:
                 "carrying": {k: v > 0 for k, v in other.inventory.items()},
             }
             for other in agents
-            if other is not agent and other.alive and in_view(other.position)
+            if other is not agent
+            and other.alive
+            and min_x <= other.position.x <= max_x
+            and min_y <= other.position.y <= max_y
         ]
 
         return Observation(
@@ -76,6 +86,25 @@ class PerceptionSystem:
             visible_food=visible_food,
             visible_water=visible_water,
             visible_agents=visible_agents,
-            visible_patches=[f.position for f in world.food_sources if in_view(f.position)],
-            visible_tiles=tiles,
+            visible_patches=[f.position for f in patches],
+            visible_tiles=tiles,  # type: ignore[arg-type]  # shared: read only
+            visible_set=tile_set,
         )
+
+
+_SQUARES: dict[tuple[int, int, int, int], tuple[tuple[Position, ...], frozenset]] = {}
+
+
+def _square(min_x: int, max_x: int, min_y: int, max_y: int):
+    """The tiles of a square, x then y (S2.6.6: made once and kept; a long run sees a few
+    thousand different squares)."""
+    key = (min_x, max_x, min_y, max_y)
+    tiles = _SQUARES.get(key)
+    if tiles is None:
+        if len(_SQUARES) > 200_000:
+            _SQUARES.clear()
+        square = tuple(
+            Position(x, y) for x in range(min_x, max_x + 1) for y in range(min_y, max_y + 1)
+        )
+        tiles = _SQUARES[key] = (square, frozenset(square))
+    return tiles

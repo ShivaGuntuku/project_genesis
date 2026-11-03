@@ -100,6 +100,7 @@ export class WorldScene extends Phaser.Scene {
   private foodMax: number[] = [];
   private water: Phaser.GameObjects.Image[] = [];
   private lakeImages = new Map<number, Phaser.GameObjects.Image[]>(); // lake id -> its tiles
+  private mapObjects: Phaser.GameObjects.GameObject[] = []; // the drawn land (S2.1: redrawn)
   private dry = "";
   private graves: { img: Phaser.GameObjects.Image; until: number }[] = [];
   private links: Link[] = [];
@@ -129,10 +130,7 @@ export class WorldScene extends Phaser.Scene {
     const { world } = this.snap;
 
     this.drawMap();
-    world.food.forEach((f) => {
-      this.bushes.push(this.add.image(f.x * T + 8, f.y * T + 8, "bush-full").setDepth(DEPTH.things));
-      this.foodMax.push(f.max);
-    });
+    this.drawBushes();
 
     this.linkLayer = this.add.graphics().setDepth(DEPTH.links);
     this.ring = this.add.image(0, 0, "ring").setDepth(DEPTH.agents - 1).setVisible(false);
@@ -158,17 +156,41 @@ export class WorldScene extends Phaser.Scene {
     this.hooks.onReady();
   }
 
+  private drawBushes() {
+    this.bushes.forEach((b) => b.destroy());
+    this.bushes = [];
+    this.foodMax = [];
+    this.snap.world.food.forEach((f) => {
+      this.bushes.push(this.add.image(f.x * T + 8, f.y * T + 8, "bush-full").setDepth(DEPTH.things));
+      this.foodMax.push(f.max);
+    });
+  }
+
+  /** S2.1: the land changed (woods, water, patches, paths): draw it again. */
+  applyLand() {
+    this.mapObjects.forEach((o) => o.destroy());
+    this.mapObjects = [];
+    this.water = [];
+    this.lakeImages.clear();
+    this.dry = ""; // tint dry lakes again on the next frame
+    this.drawMap();
+    this.drawBushes();
+  }
+
   private drawMap() {
     const { world } = this.snap;
     const at = (x: number, y: number) => world.tiles[y]?.[x];
-    const lakes = numberLakes(world.tiles, world.width, world.height);
+    const lakes = world.lakes
+      ? new Map(world.lakes.flatMap((id, i) => (id ? [[`${i % world.width},${Math.floor(i / world.width)}`, id] as [string, number]] : [])))
+      : numberLakes(world.tiles, world.width, world.height);
+    const keep = <O extends Phaser.GameObjects.GameObject>(o: O): O => { this.mapObjects.push(o); return o; };
     for (let y = 0; y < world.height; y++)
       for (let x = 0; x < world.width; x++) {
         const t = at(x, y);
         const px = x * T + 8, py = y * T + 8;
         const variant = (x * 7 + y * 13) % 4;
         if (t === "w") {
-          const img = this.add.image(px, py, "water0").setDepth(DEPTH.ground);
+          const img = keep(this.add.image(px, py, "water0").setDepth(DEPTH.ground));
           this.water.push(img);
           const lake = lakes.get(`${x},${y}`) ?? 0;
           if (!this.lakeImages.has(lake)) this.lakeImages.set(lake, []);
@@ -178,14 +200,16 @@ export class WorldScene extends Phaser.Scene {
         const mask = (at(x, y - 1) === "w" ? 1 : 0) | (at(x + 1, y) === "w" ? 2 : 0)
           | (at(x, y + 1) === "w" ? 4 : 0) | (at(x - 1, y) === "w" ? 8 : 0);
         const ground = mask ? shoreTexture(this, mask, variant) : `grass${variant}`;
-        this.add.image(px, py, ground).setDepth(DEPTH.ground);
-        if (t === "f") this.add.image(px, py, "tree").setDepth(DEPTH.things + y / 100);
-        if (t === "m") this.add.image(px, py, "rock").setDepth(DEPTH.ground + 1);
+        keep(this.add.image(px, py, ground).setDepth(DEPTH.ground));
+        if (t === "f") keep(this.add.image(px, py, "tree").setDepth(DEPTH.things + y / 100));
+        if (t === "m") keep(this.add.image(px, py, "rock").setDepth(DEPTH.ground + 1));
         if (t === "k") { // a high ridge (M8e): rock on dark ground, impassable
-          this.add.image(px, py, ground).setTint(0x55606e).setDepth(DEPTH.ground);
-          this.add.image(px, py, "rock").setTint(0x8a8f99).setDepth(DEPTH.ground + 1);
+          keep(this.add.image(px, py, ground).setTint(0x55606e).setDepth(DEPTH.ground));
+          keep(this.add.image(px, py, "rock").setTint(0x8a8f99).setDepth(DEPTH.ground + 1));
         }
       }
+    for (const [x, y] of world.paths ?? []) // S2.1: worn paths, a sandy track
+      keep(this.add.rectangle(x * T + 8, y * T + 8, 10, 10, 0xc8b07a, 0.75).setDepth(DEPTH.ground + 0.5));
   }
 
   private setupCamera() {
@@ -198,6 +222,7 @@ export class WorldScene extends Phaser.Scene {
 
     let drag: { x: number; y: number; moved: boolean } | null = null;
     this.input.on("pointerdown", (p: Phaser.Input.Pointer) => {
+      if (this.onMinimap(p)) return; // jumping there, not dragging
       drag = { x: p.x, y: p.y, moved: false };
     });
     this.input.on("pointermove", (p: Phaser.Input.Pointer) => {
@@ -219,9 +244,87 @@ export class WorldScene extends Phaser.Scene {
     });
     this.input.on("wheel", (_p: unknown, _o: unknown, _dx: number, dy: number) => {
       this.userMovedCamera = true;
-      cam.setZoom(Phaser.Math.Clamp(cam.zoom * (dy > 0 ? 0.85 : 1.18), 1, 10));
+      cam.setZoom(Phaser.Math.Clamp(cam.zoom * (dy > 0 ? 0.85 : 1.18), this.minZoom(), 10));
       this.updateLabelVisibility();
     });
+    // S2.0: F fits the whole map; M shows or hides the minimap.
+    document.addEventListener("keydown", (e) => {
+      if ((e.target as HTMLElement).tagName === "INPUT") return;
+      if (e.key === "f" || e.key === "F") {
+        this.userMovedCamera = false;
+        cam.stopFollow();
+        this.fitCamera();
+      } else if (e.key === "m" || e.key === "M") {
+        this.minimapOn = !this.minimapOn;
+        this.layoutMinimap();
+      }
+    });
+    this.setupMinimap();
+    this.scale.on("resize", () => this.layoutMinimap());
+  }
+
+  // ---------------------------------------------------------------- minimap (S2.0)
+
+  private minimap?: Phaser.Cameras.Scene2D.Camera;
+  private viewBox?: Phaser.GameObjects.Graphics;
+  private minimapOn = true;
+
+  /** The zoom that shows the whole map (it may be well below 1 for big worlds). */
+  minZoom(): number {
+    const { world } = this.snap;
+    const fit = Math.min(this.scale.width / (world.width * T), this.scale.height / (world.height * T));
+    return Math.max(0.05, Math.min(1, fit * 0.96));
+  }
+
+  private setupMinimap() {
+    this.minimap = this.cameras.add(0, 0, 10, 10).setName("minimap");
+    this.minimap.setBackgroundColor("#0b0f14");
+    this.viewBox = this.add.graphics().setDepth(DEPTH.night + 10);
+    this.cameras.main.ignore(this.viewBox);
+    this.layoutMinimap();
+  }
+
+  private layoutMinimap() {
+    const mini = this.minimap;
+    if (!mini) return;
+    const { world } = this.snap;
+    const size = Math.min(200, Math.floor(this.scale.width * 0.22));
+    const scale = size / (Math.max(world.width, world.height) * T);
+    const w = Math.ceil(world.width * T * scale), h = Math.ceil(world.height * T * scale);
+    mini.setViewport(12, this.scale.height - h - 12, w, h);
+    mini.setZoom(scale).centerOn((world.width * T) / 2, (world.height * T) / 2);
+    mini.setVisible(this.minimapOn && this.minimapUseful());
+  }
+
+  /** Worth showing only when the map doesn't fit in view at the current zoom. */
+  private minimapUseful(): boolean {
+    const { world } = this.snap;
+    const v = this.cameras.main.worldView;
+    return v.width < world.width * T * 0.98 || v.height < world.height * T * 0.98;
+  }
+
+  private onMinimap(p: Phaser.Input.Pointer): boolean {
+    const mini = this.minimap;
+    if (!mini || !mini.visible) return false;
+    if (p.x < mini.x || p.x > mini.x + mini.width || p.y < mini.y || p.y > mini.y + mini.height) return false;
+    const world = mini.getWorldPoint(p.x, p.y);
+    this.userMovedCamera = true;
+    this.cameras.main.stopFollow();
+    this.cameras.main.centerOn(world.x, world.y);
+    return true;
+  }
+
+  private drawViewBox() {
+    const box = this.viewBox, mini = this.minimap;
+    if (!box || !mini) return;
+    const visible = this.minimapOn && this.minimapUseful();
+    if (mini.visible !== visible) mini.setVisible(visible);
+    box.clear();
+    if (!visible) return;
+    const { world } = this.snap;
+    box.lineStyle(3 / mini.zoom, 0x8a8f99, 1).strokeRect(0, 0, world.width * T, world.height * T);
+    const v = this.cameras.main.worldView;
+    box.lineStyle(2 / mini.zoom, 0xffffff, 0.9).strokeRect(v.x, v.y, v.width, v.height);
   }
 
   /** ?follow=Name&zoom=5 in the address bar opens the viewer on someone. */
@@ -234,15 +337,14 @@ export class WorldScene extends Phaser.Scene {
       this.follow(match.info.id);
       this.select(match.info.id);
     }
-    if (zoom > 0) this.cameras.main.setZoom(Phaser.Math.Clamp(zoom, 1, 10));
+    if (zoom > 0) this.cameras.main.setZoom(Phaser.Math.Clamp(zoom, this.minZoom(), 10));
     this.updateLabelVisibility();
   }
 
   fitCamera() {
     const { world } = this.snap;
     const cam = this.cameras.main;
-    const zoom = Math.min(this.scale.width / (world.width * T), this.scale.height / (world.height * T));
-    cam.setZoom(Math.max(1, zoom * 0.96));
+    cam.setZoom(this.minZoom()); // the whole map, however big (S2.0)
     cam.centerOn((world.width * T) / 2, (world.height * T) / 2);
     this.updateLabelVisibility();
   }
@@ -496,6 +598,7 @@ export class WorldScene extends Phaser.Scene {
   }
 
   update() {
+    this.drawViewBox();
     const now = this.time.now;
     const textScale = this.textScale();
     this.agents.forEach((a) => {

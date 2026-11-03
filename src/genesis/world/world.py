@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from enum import Enum
+from typing import NamedTuple
 
 from genesis.config import WorldConfig
 from genesis.rules import Rules
@@ -14,8 +15,10 @@ class TerrainType(Enum):
     PEAK = "peak"  # high ridge: nobody can cross it (M8e)
 
 
-@dataclass(frozen=True)
-class Position:
+class Position(NamedTuple):
+    """A tile. A named tuple (S2.6.6): hashing and comparing run in C, with the same hash as
+    the frozen dataclass it was, so sets and dicts keep their order and history is unchanged."""
+
     x: int
     y: int
 
@@ -46,6 +49,7 @@ class World:
 
     def __init__(self, config: WorldConfig):
         self.name = config.name
+        self.seed = config.seed
         self.width = config.width
         self.height = config.height
         self.rules: Rules = config.rules
@@ -62,10 +66,10 @@ class World:
             for y in range(self.height):
                 self.terrain[Position(x, y)] = default
 
-        for region in config.regions:
-            terrain = TerrainType(region.terrain)
-            for x in range(max(0, region.x[0]), min(self.width - 1, region.x[1]) + 1):
-                for y in range(max(0, region.y[0]), min(self.height - 1, region.y[1]) + 1):
+        for spec in config.regions:
+            terrain = TerrainType(spec.terrain)
+            for x in range(max(0, spec.x[0]), min(self.width - 1, spec.x[1]) + 1):
+                for y in range(max(0, spec.y[0]), min(self.height - 1, spec.y[1]) + 1):
                     self.terrain[Position(x, y)] = terrain
 
         # Terrain never changes, so walkable tiles, lakes and shores are worked out once.
@@ -90,6 +94,8 @@ class World:
         # Culture (M8b): the concept registry and structures, shared with the simulation.
         self.concepts: dict = {}
         self.structures: list[dict] = []
+        self.research: dict = {"lore": {}, "records": []}  # S2.3: facts found; records kept
+        self.culture: dict = {"ideas": {}, "next": 1, "acts": {}}  # S2.4: shared ideas
         # Economy (M8d): recent indirect exchanges and the currencies that emerged.
         self.economy: dict = {"indirect": [], "currencies": []}
 
@@ -140,6 +146,13 @@ class World:
         self.burned: frozenset[Position] = frozenset()
         self.regrow: dict[str, float] = {}  # region -> berry growth factor now
         self.troubled: frozenset[str] = frozenset()  # valleys people want to leave now
+        self.land_version = 0  # S2.1: bumped whenever tiles change (caches key on it)
+        # S2.1: a living land (woods, patches, lakes and paths that change); None = static.
+        self.land = None
+        if self.rules.living_land:
+            from genesis.world.land import Land
+
+            self.land = Land(self, config.seed)
 
     # --------------------------------
     # Terrain
@@ -203,6 +216,59 @@ class World:
         for cache in ("_walkable_grid", "_material_grids"):
             if hasattr(self, cache):
                 delattr(self, cache)
+        self.land_version += 1
+        if self.land is not None:
+            self.land.rebase(self)
+
+    def change_tiles(self, changes: dict[Position, tuple[TerrainType, int | None]]):
+        """S2.1: change some tiles and update only what follows from them (walkable tiles,
+        neighbours, lakes, shores, woods, cached grids). Water tiles carry their lake's number;
+        valleys (`region_at`) stay as they are, since every tile already has one."""
+        touched = [p for p, (t, _) in changes.items() if self.terrain[p] != t]
+        if not touched:
+            return
+        walkable = set(self.walkable)
+        forest = set(self.forest)
+        for p in touched:
+            t, lake = changes[p]
+            self.terrain[p] = t
+            if t in (TerrainType.WATER, TerrainType.PEAK):
+                walkable.discard(p)
+            else:
+                walkable.add(p)
+            if t == TerrainType.WATER and lake is not None:
+                self.lake_of[p] = lake
+                self.lakes = max(self.lakes, lake)
+            else:
+                self.lake_of.pop(p, None)
+            if t == TerrainType.FOREST:
+                forest.add(p)
+            elif p not in self.burned:
+                forest.discard(p)
+        self.walkable = frozenset(walkable)
+        self.forest = frozenset(forest)
+        area = set(touched)
+        for p in touched:
+            area.update(n for n in p.neighbors() if n in self.terrain)
+        for p in area:
+            self.adjacent[p] = tuple(n for n in p.neighbors() if n in walkable)
+            near = (
+                frozenset(self.lake_of[n] for n in p.neighbors() if n in self.lake_of)
+                if self.terrain[p] != TerrainType.WATER
+                else frozenset()
+            )
+            if near:
+                self.shore_lakes[p] = near
+            else:
+                self.shore_lakes.pop(p, None)
+        self.shore = frozenset(self.shore_lakes)
+        grid = getattr(self, "_walkable_grid", None)
+        if grid is not None:
+            for p in touched:
+                grid[p.x, p.y] = p in walkable
+        if hasattr(self, "_material_grids"):
+            del self._material_grids
+        self.land_version += 1
 
     def _valleys(self) -> dict[Position, str]:
         """Each tile's valley: the founders' start nearest on foot (ties: the first start)."""
@@ -301,15 +367,18 @@ class World:
     def update(self, tick: int = 0):
         """Advance the world by one tick (resource regrowth: per hour × hours per tick,
         times the season's factor in worlds with seasons)."""
-        factor = self.calendar.hours_per_tick
+        factor: float = self.calendar.hours_per_tick
         if self.calendar.seasons:
             r = self.rules
             factor *= (r.regen_spring, r.regen_wet, r.regen_dry, r.regen_cold)[
                 self.calendar.season_index(tick)
             ]
+        land = self.land
         for food in self.food_sources:
             if food.id in self.famine or food.stage > self.peak_population:
                 continue
+            if land is not None and food.quantity < food.max_quantity * 0.2:
+                land.low[food.id] = land.low.get(food.id, 0) + 1  # S2.1: stripped bare
             f = factor * self.regrow.get(self.food_region[food.id], 1.0) if self.regrow else factor
             grown = food.regen_per_tick if f == 1 else round(food.regen_per_tick * f)
             food.quantity = min(food.max_quantity, food.quantity + grown)

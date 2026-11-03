@@ -34,8 +34,10 @@ def valleys(
     raise ValueError("could not generate a connected map; try another seed or a bigger map")
 
 
-def _layout(rng, width, height, count, founders, passes=True) -> dict:
-    regions, food, starts = [], [], []
+def _layout(rng, width, height, count, founders, passes=True) -> dict | None:
+    regions: list = []
+    food: list = []
+    starts: list = []
     band = width // count
     for k in range(1, count):  # ridges with a pass each
         x = k * band - RIDGE // 2

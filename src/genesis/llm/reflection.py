@@ -12,6 +12,7 @@ reflection is recorded like any other call, so replays reproduce it exactly.
 
 import json
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 from genesis.culture.words import leak_words
@@ -171,7 +172,7 @@ def build_prompt(ctx, sim, agent, today, people, mind) -> str:
     return "\n".join(lines)
 
 
-def schema(names: list[str], needs: list[str] = ()) -> dict:
+def schema(names: list[str], needs: Sequence[str] = ()) -> dict:
     properties = {
         "thought": {"type": "string"},
         "beliefs": {"type": "array", "items": {"type": "string"}},
@@ -196,7 +197,7 @@ def schema(names: list[str], needs: list[str] = ()) -> dict:
 
 
 def parse(
-    text: str, names: list[str], record: dict | None, needs: list[str] = ()
+    text: str, names: list[str], record: dict | None, needs: Sequence[str] = ()
 ) -> Reflection | None:
     def invalid(reason):
         if record is not None:
@@ -214,7 +215,8 @@ def parse(
     raw_beliefs = data.get("beliefs") or []
     if not isinstance(raw_beliefs, list) or not all(isinstance(b, str) for b in raw_beliefs):
         return invalid("beliefs must be a list of text")
-    beliefs, dropped = [], []
+    beliefs: list[str] = []
+    dropped: list[str] = []
     for b in raw_beliefs:
         b = schemas.clean_line(b, 160)
         if leak_words(b):  # M8f: a belief about things the valley doesn't have
@@ -268,7 +270,7 @@ def parse(
             say=" | ".join(beliefs) or story,
             thought=thought,
         )
-    return Reflection(thought, beliefs, story, feelings, record, goal)
+    return Reflection(thought, beliefs, story, feelings, record, goal)  # type: ignore[arg-type]
 
 
 def apply(ctx, sim, agent, result: Reflection, people: dict):
@@ -305,6 +307,10 @@ def apply(ctx, sim, agent, result: Reflection, people: dict):
             about=(),
             source_agent_id=None,
         )
+        if ctx.world.rules.culture:  # S2.4: it joins the valley's ideas
+            from genesis.culture import ideas
+
+            ideas.from_belief(ctx, agent, belief, event_id)
     if result.story:
         agent.story = result.story
     if result.goal is not None and agent.stage != "child":

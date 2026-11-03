@@ -1,5 +1,7 @@
 """Turn events into short human-readable sentences."""
 
+from typing import Any
+
 from genesis.history import events as ev
 from genesis.history.events import Event
 
@@ -21,7 +23,7 @@ def clock(tick: int, calendar) -> str:
     return calendar.clock(tick)
 
 
-DISASTER_WORDS = {
+DISASTER_WORDS: dict[Any, str] = {
     "drought": "a great drought",
     "winter": "a harsh winter",
     "flood": "a flood",
@@ -60,7 +62,7 @@ def describe(event: Event, names: dict[int, str]) -> str:
             return f"{actor} died of {d.get('cause')}{where}"
         case ev.LIFE_STAGE:
             stage = d.get("stage")
-            words = {"adult": "came of age", "elder": "became an elder"}
+            words: dict[Any, str] = {"adult": "came of age", "elder": "became an elder"}
             return (
                 f"{actor} {words.get(stage, 'became ' + str(stage))} (age {d.get('age_days')} days)"
             )
@@ -90,6 +92,19 @@ def describe(event: Event, names: dict[int, str]) -> str:
         case ev.GRIEVED:
             widowed = ", and is now widowed" if d.get("widowed") else ""
             return f"{actor} grieves for {target}, their {d.get('relation')}{widowed}"
+        case ev.LAND_CHANGED:
+            at = f" at ({event.x},{event.y})" if event.x is not None else ""
+            kind = d.get("kind")
+            if kind == "patch_born":
+                return f"A new berry patch began to grow{at}"
+            if kind == "patch_died":
+                why = "of age" if d.get("why") == "old" else "after being stripped bare too long"
+                return f"The berry patch{at} died {why}"
+            if kind == "pond_formed":
+                return f"A spring rose{at}: a new pond"
+            if kind == "pond_dried":
+                return f"The pond{at} dried up"
+            return f"The land changed{at}"
         case ev.WORLD_CHANGED:
             what = (
                 f"lake {d.get('target')}"
@@ -113,9 +128,8 @@ def describe(event: Event, names: dict[int, str]) -> str:
         case ev.FOUNDED_GROUP:
             return f"{actor} and {target} founded a group: {d.get('name')}{where}"
         case ev.JOINED_GROUP:
-            how = {"born": " (born into it)", "invited": f" (asked by {target})"}.get(
-                d.get("how"), ""
-            )
+            hows: dict[Any, str] = {"born": " (born into it)", "invited": f" (asked by {target})"}
+            how = hows.get(d.get("how"), "")
             return f"{actor} joined {d.get('name')}{how}"
         case ev.LEFT_GROUP:
             return f"{actor} left {d.get('name')}: {d.get('reason')}"
@@ -153,12 +167,32 @@ def describe(event: Event, names: dict[int, str]) -> str:
             return f"{actor} tried {tried} ({how}) for {d.get('problem')}; it did not work"
         case ev.INVENTED:
             mats, acts = d.get("recipe") or [[], []]
+            what = (
+                "a new kind of stuff"
+                if d.get("function") == "material"
+                else f"a thing that {d.get('function')}"
+            )
             return (
-                f"{actor} invented {d.get('name')}: a thing that {d.get('function')} "
-                f"({' + '.join(mats)}, {', '.join(acts)})"
+                f"{actor} invented {d.get('name')}: {what} ({' + '.join(mats)}, {', '.join(acts)})"
             )
         case ev.MADE:
             return f"{actor} made a {d.get('name')} ({d.get('function')})"
+        case ev.LORE_FOUND:
+            first = " (nobody knew it before)" if d.get("first") else ""
+            return f"{actor} found out: {d.get('text')}{first}"
+        case ev.RECORDED:
+            n = len(d.get("lore") or []) + len(d.get("concepts") or [])
+            things = f"{n} thing{'s' if n != 1 else ''}"
+            return f"{actor} marked {things} known into record {d.get('record')}"
+        case ev.IDEA_BORN:
+            grew = " (grown from an older idea)" if d.get("parents") else ""
+            return f'A new {d.get("kind")}: "{d.get("text")}"{grew}'
+        case ev.IDEA_LOST:
+            return f'Nobody holds "{d.get("text")}" any more'
+        case ev.NORM_BROKEN:
+            return f"{actor} refused {target} ({d.get('resource')}), against their group's way"
+        case ev.ITEM_BROKE:
+            return f"{actor}'s {d.get('name')} wore out ({d.get('function')})"
         case ev.BUILT:
             return f"{actor} built a {d.get('name')}{where}"
         case ev.LEARNED:
@@ -168,8 +202,8 @@ def describe(event: Event, names: dict[int, str]) -> str:
         case ev.CONCEPT_LOST:
             return f"Nobody alive knows how to make {d.get('name')} any more ({d.get('function')})"
         case ev.DISASTER:
-            what = DISASTER_WORDS.get(d.get("kind"), d.get("kind"))
-            where = "every valley" if d.get("region") == "all" else d.get("region")
+            what = DISASTER_WORDS.get(d.get("kind"), str(d.get("kind")))
+            where = "every valley" if d.get("region") == "all" else str(d.get("region"))
             if d.get("started"):
                 return f"{what.capitalize()} struck {where} ({d.get('people')} people there)"
             return f"{what.capitalize()} in {where} is over"

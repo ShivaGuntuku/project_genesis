@@ -1,6 +1,7 @@
 """Long runs that look after themselves (M8.5). See docs/11.
 
-    genesis start WORLD --years 100     run towards a target (saved once a simulated day)
+    genesis start WORLD --years 100     run towards a target (saved once a simulated day;
+                                        every 10 days without the LLM)
     genesis resume WORLD                continue towards the target after any stop or crash
     genesis pause / continue / stop WORLD
     genesis service install WORLD       a systemd user service: starts at boot, restarts
@@ -77,9 +78,36 @@ def lock_file(world_file: Path) -> Path:
 
 def is_running(world_file: Path) -> bool:
     """True while some process holds the world's run lock (it is freed even by kill -9)."""
+    return _held(lock_file(world_file))
+
+
+MAX_RUNNING = 2  # S2.0: at most this many worlds run at once (GENESIS_MAX_RUNNING overrides)
+
+
+def max_running() -> int:
+    try:
+        return max(1, int(os.environ.get("GENESIS_MAX_RUNNING", MAX_RUNNING)))
+    except ValueError:
+        return MAX_RUNNING
+
+
+def _read_holder(path: Path) -> dict:
+    """What a lock file says about its holder ({} if nobody holds it)."""
+    try:
+        text = path.read_text().strip()
+    except OSError:
+        return {}
+    if not text:
+        return {}
+    try:
+        return json.loads(text)
+    except ValueError:  # written by an older Genesis: plain text
+        return {"who": text}
+
+
+def _held(path: Path) -> bool:
     import fcntl
 
-    path = lock_file(world_file)
     if not path.exists():
         return False
     with open(path, "a+") as f:
@@ -91,12 +119,30 @@ def is_running(world_file: Path) -> bool:
         return False
 
 
+def holder(world_file: Path) -> dict | None:
+    """Who runs this world now: {kind, who, pid, world, since}, or None."""
+    path = lock_file(world_file)
+    return _read_holder(path) if _held(path) else None
+
+
+def owners(folder: Path) -> list[dict]:
+    """Every world running now in this data folder, with its owner."""
+    out = []
+    for path in sorted(Path(folder).glob("*.lock")):
+        if path.stem.startswith("slot-") or not _held(path):
+            continue
+        out.append({"world": path.stem, **_read_holder(path)})
+    return out
+
+
 class run_lock:
     """Held by whatever simulates a world (long run, `genesis run`, the viewer). A second one
-    is refused, so two processes never write the same world file."""
+    is refused, so two processes never write the same world file; and no more than
+    `max_running()` worlds run at once in one data folder (S2.0)."""
 
-    def __init__(self, world_file: Path, who: str):
-        self.path, self.who, self.file = lock_file(world_file), who, None
+    def __init__(self, world_file: Path, who: str, kind: str = "run"):
+        self.path, self.who, self.kind = lock_file(world_file), who, kind
+        self.file = self.slot = None
 
     def __enter__(self):
         import fcntl
@@ -107,26 +153,121 @@ class run_lock:
             fcntl.flock(self.file, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
             self.file.seek(0)
-            holder = self.file.read().strip() or "another process"
+            info = _read_holder(self.path)
             self.file.close()
+            self.file = None
+            who = info.get("who", "another process")
+            pid = f" (pid {info['pid']})" if info.get("pid") else ""
             raise WorldBusy(
-                f"{self.path.stem} is already being run by {holder}. Watch it with "
+                f"{self.path.stem} is already being run by {who}{pid}. Watch it with "
                 f"`genesis dashboard {self.path.stem}`, or stop it first "
                 f"(`genesis stop {self.path.stem}`)."
             ) from None
-        self.file.seek(0)
-        self.file.truncate()
-        self.file.write(f"{self.who} (pid {os.getpid()})")
-        self.file.flush()
+        try:
+            self.slot = self._take_slot()
+        except WorldBusy:
+            fcntl.flock(self.file, fcntl.LOCK_UN)
+            self.file.close()
+            self.file = None
+            raise
+        info = {
+            "world": self.path.stem,
+            "who": self.who,
+            "kind": self.kind,
+            "pid": os.getpid(),
+            "since": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        }
+        for f in (self.file, self.slot):
+            f.seek(0)
+            f.truncate()
+            f.write(json.dumps(info))
+            f.flush()
         return self
+
+    def _take_slot(self):
+        import fcntl
+
+        folder = self.path.parent
+        for i in range(max_running()):
+            f = open(folder / f"slot-{i}.lock", "a+")
+            try:
+                fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return f
+            except OSError:
+                f.close()
+        busy = ", ".join(
+            f"{o['world']} ({o.get('who', '?')}, pid {o.get('pid', '?')})"
+            for o in owners(folder)
+            if o["world"] != self.path.stem  # our own world lock, just taken
+        )
+        raise WorldBusy(
+            f"{max_running()} worlds are already running: {busy}. Stop one first "
+            f"(`genesis stop WORLD`), or set GENESIS_MAX_RUNNING."
+        )
 
     def __exit__(self, *exc):
         import fcntl
 
-        if self.file is not None:
-            self.file.truncate(0)
-            fcntl.flock(self.file, fcntl.LOCK_UN)
-            self.file.close()
+        for f in (self.slot, self.file):
+            if f is not None:
+                f.truncate(0)
+                fcntl.flock(f, fcntl.LOCK_UN)
+                f.close()
+        self.file = self.slot = None
+
+
+def stop_world(world_file: Path, wait: float = 60) -> str:
+    """Stop whoever runs this world (long run, viewer or `genesis run`): ask through the
+    control file and SIGTERM (every owner stops cleanly on it: it saves first). Returns what
+    happened."""
+    info = holder(world_file)
+    if info is None:
+        return "not running"
+    control(world_file, "stop")
+    pid = info.get("pid")
+    if pid:
+        try:
+            os.kill(int(pid), signal.SIGTERM)
+        except (ProcessLookupError, PermissionError, ValueError):
+            pass
+    deadline = time.monotonic() + wait
+    while time.monotonic() < deadline:
+        if holder(world_file) is None:
+            return f"stopped ({info.get('who', 'owner')})"
+        time.sleep(0.2)
+    return f"still stopping ({info.get('who', 'owner')}, pid {pid}); it saves first"
+
+
+def clean(folder: Path, worlds_folder: Path) -> list[str]:
+    """Tidy the run folder: drop entries of worlds that no longer exist, and mark runs whose
+    process is gone as stopped. Returns what was done."""
+    done: list[str] = []
+    folder, worlds_folder = Path(folder), Path(worlds_folder)
+    if not folder.exists():
+        return done
+    for path in sorted(folder.iterdir()):
+        name = path.stem
+        if path.suffix == ".tmp":
+            path.unlink(missing_ok=True)
+            continue
+        if name.startswith("slot-"):
+            continue
+        if not (worlds_folder / f"{name}.sqlite").exists():
+            if path.suffix == ".lock" and _held(path):
+                continue
+            path.unlink(missing_ok=True)
+            done.append(f"removed {path.name} (no world {name})")
+    for path in sorted(folder.glob("*.json")):
+        world = worlds_folder / f"{path.stem}.sqlite"
+        try:
+            raw = json.loads(path.read_text())
+        except (OSError, ValueError):
+            continue
+        if raw.get("state") in (RUNNING, PAUSED) and not is_running(world):
+            raw.update(state=STOPPED, pid=None, note="the process was gone; resume continues it")
+            path.write_text(json.dumps(raw, indent=1))
+            done.append(f"{path.stem}: marked stopped (its process was gone)")
+    return done
 
 
 def _write_status(world_file: Path, **fields):
@@ -220,6 +361,9 @@ def restore_latest(world_file: Path) -> Path | None:
 # =================================================================
 
 
+RULES_SAVE_DAYS = 10  # a rules-only run saves (and obeys stop, God commands) every 10 days
+
+
 def run(
     world_file: Path,
     target_tick: int | None = None,
@@ -232,7 +376,7 @@ def run(
     """Run a world towards its target, saving, journaling, snapshotting and obeying the
     control file. Returns why it stopped. Safe to kill at any moment."""
     world_file = Path(world_file)
-    with run_lock(world_file, "a long run (genesis start/resume)"):
+    with run_lock(world_file, "a long run (genesis start/resume)", kind="long run"):
         return _run(world_file, target_tick, llm, snapshot_minutes, keep, max_ticks, echo)
 
 
@@ -260,6 +404,8 @@ def _run(world_file, target_tick, llm, snapshot_minutes, keep, max_ticks, echo) 
         raise ValueError("no target: start the run with a number of years or days first")
     cal = sim.world.calendar
     every = sim.config.save_every_ticks
+    if sim.mind is None:  # S2.6.6: rules only: a crash costs only recomputing, so save less
+        every = max(every, RULES_SAVE_DAYS * cal.ticks_per_day)
     stop = {"reason": None}
 
     def request_stop(signum, _frame):
@@ -303,7 +449,7 @@ def _run(world_file, target_tick, llm, snapshot_minutes, keep, max_ticks, echo) 
                 break
             sim.tick()
             if sim.tick_count % every and not stop["reason"]:
-                continue  # saved once a simulated day (or on a stop)
+                continue  # saved once a simulated day (10 without the LLM; or on a stop)
             from genesis.god import interventions as god  # M9: queued God commands
 
             for qid, event, error in god.apply_pending(sim, store):
@@ -320,6 +466,7 @@ def _run(world_file, target_tick, llm, snapshot_minutes, keep, max_ticks, echo) 
                 alive=alive,
                 ticks_per_second=round(rate, 2),
                 eta_hours=round((target_tick - sim.tick_count) / rate / 3600, 1) if rate else None,
+                pace=_pace(sim),
             )
             if time.monotonic() - last_snapshot >= snapshot_minutes * 60:
                 snapshot(store, world_file, sim.tick_count, keep)
@@ -366,6 +513,18 @@ def _run(world_file, target_tick, llm, snapshot_minutes, keep, max_ticks, echo) 
             pid=None,
         )
     return reason
+
+
+def _pace(sim) -> dict | None:
+    """S2.6.5: the share of plans and reflections asked, when a real-time target is set."""
+    pace = getattr(sim.mind, "pace", None)
+    if pace is None or pace.target <= 0:
+        return None
+    return {
+        "target_minutes_per_year": pace.target,
+        "minutes_per_year": round(pace.last_minutes, 1) if pace.last_minutes else None,
+        "share": round(pace.share, 2),
+    }
 
 
 # =================================================================

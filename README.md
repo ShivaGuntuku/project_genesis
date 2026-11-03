@@ -6,7 +6,7 @@ Genesis is a local, deterministic simulation of a small society. Its people are 
 
 The long-term aim is the **Millennium Experiment**: let several valleys run for a thousand simulated years and see whether they grow a culture of their own, with their own words, ideas, beliefs and ways of living, different from ours and from each other.
 
-> Status: the engine, the observer tools and crash-safe long runs are complete. The next phase is about open-ended invention (tools that build on tools, fire, farming, building) and a land that changes over time.
+> Status: the engine, the observer tools, crash-safe long runs and a living land are complete. The next phase is about open-ended invention (tools that build on tools, fire, farming, building) and research by the agents themselves.
 
 ## What it does
 
@@ -14,6 +14,7 @@ The long-term aim is the **Millennium Experiment**: let several valleys run for 
 - **Society:** conversations and speech acts (sharing, gifts, lies, gossip, threats), relationships with several feelings, families and inheritance, groups with leaders, orders and challenges, fights and territory.
 - **Culture:** materials with hidden physics, invention and teaching, names in the valley's own made-up words, barter, promises, and money that may emerge.
 - **A millennium engine:** years and seasons, sleep shifts, generated valleys with ridges and passes, staged growth, disasters every 15–25 years, and migration.
+- **A living land:** woods spread and die back, lakes rise in the wet season and shrink in the dry, a slow climate drift over centuries brings springs and ponds or dries them, berry patches seed new ones and die when stripped bare, and much-walked ground becomes paths.
 - **No words from our world:** what the agents say, believe and invent is checked so that it stays inside their world.
 - **Long runs that survive anything:** daily transactional saves, every LLM answer journaled on arrival, automatic snapshots and integrity checks. A run resumes after a crash or `kill -9` with exactly the same history.
 - **Observe and experiment:** a live pixel-art viewer, an observer dashboard (world map with past years, people, conversations, ideas, economy, family tree, mind lab, interviews, God Mode), branching and comparing worlds, and an experiment runner across seeds.
@@ -54,6 +55,7 @@ uv run genesis new --config worlds/millennium.toml --name myworld --llm     # wi
 uv run genesis worlds
 
 # Watch it live in the browser (the viewer runs the world itself): http://127.0.0.1:8800
+# (F fits the whole map, M toggles the minimap)
 uv run genesis view myworld
 
 # The observer dashboard (read-only, safe at any time): http://127.0.0.1:8810
@@ -67,24 +69,41 @@ uv run genesis run myworld --days 360
 
 ```bash
 uv run genesis start myworld --years 100      # saves daily, journals LLM answers, takes snapshots
-uv run genesis runs                           # what every long run is doing
-uv run genesis pause | continue | stop myworld
+uv run genesis runs                           # what is running, who owns it (--clean tidies leftovers)
+uv run genesis pause | continue | stop myworld   # works for long runs, the viewer and `genesis run`
 uv run genesis resume myworld                 # after any stop, crash or reboot: same history
 uv run genesis service install myworld        # optional systemd user service (Linux)
 ```
 
-Only one process may run a world at a time (a lock refuses a second one). The dashboard only reads, so it is safe while a run is going.
+Only one process may run a world at a time, and at most two worlds run at once (set `GENESIS_MAX_RUNNING` to change it); a lock refuses the rest and says who holds them. The dashboard only reads, so it is safe while a run is going. Old routine history (greetings, needs, daily metrics older than two years) is folded into counts, which keeps a 1,000-year world file small.
 
 ### Inspect, experiment, intervene
 
 ```bash
 uv run genesis check myworld                  # grades the world against the project's goals
+uv run genesis report myworld                 # a one-page Markdown report (data/reports/)
+uv run genesis compact myworld                # shrink a stopped world's file (frees forgotten space)
 uv run genesis status myworld                 # also: inspect, events, why, thoughts, memories, family, metrics
 uv run genesis replay myworld                 # re-run from recorded answers: identical?
 uv run genesis experiment worlds/millennium.toml --seeds 1-4 --years 25 --arm "no trade: trade=0"
 uv run genesis branch myworld test            # copy a world, then change it:
 uv run genesis god test disaster drought all 90
 uv run genesis compare myworld test
+```
+
+### Speed with the LLM
+
+A run with the LLM is as fast as the model answers. Ollama answers one request at a time
+unless told otherwise, so `llm.workers` adds nothing until you allow parallel requests:
+
+```bash
+sudo systemctl edit ollama        # add these lines (without the #) under [Service]:
+#   Environment="OLLAMA_NUM_PARALLEL=4"
+#   Environment="OLLAMA_CONTEXT_LENGTH=3072"   # per request; keeps an 8 GB GPU from spilling
+#   Environment="OLLAMA_FLASH_ATTENTION=1"
+#   Environment="OLLAMA_KV_CACHE_TYPE=q8_0"
+sudo systemctl restart ollama     # stop running worlds first (genesis stop NAME)
+uv run genesis bench-llm --models llama3 --workers 4   # then set llm.max_calls_per_minute
 ```
 
 ## World presets
@@ -94,10 +113,23 @@ uv run genesis compare myworld test
 | `worlds/eden.toml` | a small story world (hours, a handful of people) |
 | `worlds/two_lakes.toml` | two lakes; a scheduled drought (groups and conflict) |
 | `worlds/two_valleys.toml` | two hand-made valleys, years and seasons |
-| `worlds/millennium.toml` | three generated valleys (100×100), disasters, growth towards 50 people |
+| `worlds/millennium.toml` | three generated valleys (100×100), disasters, a living land, growth towards 50 people |
 | `worlds/pilot_p*.toml` | pilot runs (10 and 100 years, isolated valleys, rules-only control) |
 
 Every setting (map, population, rules, time, LLM) lives in the TOML file.
+
+Technology, research and culture are switched on in `[rules]`:
+
+| Setting | What it turns on |
+|---|---|
+| `inventions = 2` | 14 materials and 19 uses decided by hidden physics; made things become materials for other things; tools for working (fire, cutting); things wear out and are remade; better versions and things that do two jobs count as new ideas, each with its parent idea |
+| `items_capacity = 4` | people carry only a few tools, so one thing for two jobs is worth inventing |
+| `food_spoils_per_day = 0.1` | carried food goes bad unless stored well |
+| `research = 1` | the curious test materials and keep what they find (lore); lore spreads in talk, children learn beside their parents, and records at a group's home keep it after everyone who knew it has died |
+| `culture = 1` | shared beliefs, values, stories, customs and norms that spread, change, get words of their own and die out |
+
+`inventions = 1` keeps the first, smaller set of 8 materials and 7 uses; worlds made with it go on
+exactly as before.
 
 ## Project layout
 
@@ -126,6 +158,7 @@ tests/          pytest suite
 ```bash
 uv run pytest -q                       # the test suite (about 300 tests)
 uv run ruff check src tests            # lint
+uv run mypy                            # types (the simulation core)
 uv run python scripts/kill_test.py --kills 20 --days 360   # crash-safety check
 ```
 

@@ -322,8 +322,8 @@ class DecisionEngine:
         """Invention (M8b): work on what keeps going wrong. Make the thing if they know how,
         else, if curious, gather materials and experiment."""
         from genesis.culture import inventions as inv
-        from genesis.culture.materials import SOLVES
 
+        SOLVES = inv.physics(r).SOLVES
         problem = inv.main_problem(agent, r)
         goal = agent.goal["need"] if agent.goal else None
         driven = goal in SOLVES  # a goal makes them work on it, curious or not (M8c)
@@ -343,16 +343,47 @@ class DecisionEngine:
             )
             problem = pressing[0][1] if pressing else ("carry food" if focus == "tinker" else None)
             driven, goal = problem is not None, problem
+        improving = None
+        if problem is None and inv.v2(r):  # S2.2: something better than what they have
+            improving = inv.improvement(agent, world, tick)
+            if improving is not None:
+                problem, driven, goal = improving, True, improving
+        if problem is None and r.research and agent.stage != "child":  # S2.3: curiosity
+            from genesis.culture import research
+
+            question = research.plan(agent, world, tick)
+            if question is not None:
+                kind, material, action = question
+                if kind == "study":
+                    agent.project = {"research": [material, action]}
+                    return ActionType.EXPERIMENT
+                spot = inv.gather_spot(agent, world, material)
+                if spot is not None:
+                    agent.project = {"material": material, "spot": [spot.x, spot.y]}
+                    return ActionType.GATHER
         if problem is None or agent.stage == "child":
             return None
         target = SOLVES[problem]
         concepts = world.concepts
         known = inv.known_for(agent, concepts, target)
-        if known:
+        if known and not improving:
             if target == "shelter":
                 if inv.sheltered(agent, world.structures):
                     return None
             elif inv.has_item_for(agent, concepts, target):
+                return None
+            if inv.v2(r):  # S2.2: tools and made materials: follow the chain of making
+                for concept in known:
+                    step = inv.next_step(agent, concept, concepts)
+                    if step is None:
+                        continue
+                    if step[0] == "make":
+                        agent.project = {"concept": step[1].id}
+                        return ActionType.MAKE
+                    spot = inv.gather_spot(agent, world, step[1])
+                    if spot is not None:
+                        agent.project = {"material": step[1], "spot": [spot.x, spot.y]}
+                        return ActionType.GATHER
                 return None
             concept = known[0]
             missing = inv.missing_material(agent, concept)
@@ -375,7 +406,22 @@ class DecisionEngine:
         if last is not None and tick - last < world.calendar.ticks(days=wait):  # try less often
             return None
         kinds = inv.material_kinds(agent)
-        full = inv.carrying_materials(agent) >= r.materials_capacity
+        full = inv.carrying_materials(agent) >= inv.materials_room(agent, r)
+        if inv.v2(r):  # S2.2: a made material that suits it better: make that first
+            step = inv.useful_stuff(agent, concepts, target)
+            if step is not None and step[0] == "make":
+                agent.project = {"concept": step[1].id}
+                return ActionType.MAKE
+            if step is not None and not full:
+                spot = inv.gather_spot(agent, world, step[1])
+                if spot is not None:
+                    agent.project = {"material": step[1], "spot": [spot.x, spot.y]}
+                    return ActionType.GATHER
+        if inv.v2(r) and not full:  # S2.2: first fetch what the use needs
+            found = inv.useful_material(agent, world, target)
+            if found is not None:
+                agent.project = {"material": found[0], "spot": [found[1].x, found[1].y]}
+                return ActionType.GATHER
         if len(kinds) >= 3 or (full and kinds):
             agent.project = {"problem": problem}
             return ActionType.EXPERIMENT

@@ -154,6 +154,18 @@ def test_plans_are_built_from_their_life_and_chosen_by_them():
     assert "Look after anyone who is hurt or sick" in dict(plans.options(a, ctx)).values()
 
 
+def test_explore_is_a_plan_only_while_much_of_the_valley_is_unseen():
+    sim = Simulation(WorldConfig.from_file(TWO))
+    ctx = make_ctx(sim.world, sim.population.get_alive())
+    a = sim.population.get_alive()[0]
+    a.memory.seen_positions.clear()
+    assert plans.unseen_share(a, sim.world) == 1.0
+    assert "explore" in [k for k, _ in plans.options(a, ctx)]
+    a.memory.seen_positions.update(sim.world.region_at)  # knows every tile of every valley
+    assert plans.unseen_share(a, sim.world) == 0.0
+    assert "explore" not in [k for k, _ in plans.options(a, ctx)]
+
+
 def test_a_plan_leans_free_time_its_way_and_the_persona_knows_it():
     world = m8f_world()
     a = make_agent(agent_id=1, name="A", energy=40)  # tired: would rest

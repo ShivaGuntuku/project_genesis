@@ -103,6 +103,11 @@ function onMessage(msg: ServerMessage) {
         }
       }
       break;
+    case "land":
+      if (!snapshot) return;
+      Object.assign(snapshot.world, { tiles: msg.tiles, lakes: msg.lakes, food: msg.food, paths: msg.paths });
+      if (scene?.ready) scene.applyLand();
+      break;
     case "status":
       paused = msg.paused;
       speed = msg.speed;

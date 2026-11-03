@@ -173,9 +173,18 @@ def fact_block(agent, ctx) -> str:
     if known:  # M8b: what they know how to make, in the valley's own words
         lines.append(
             "You know how to make: "
-            + "; ".join(f"{c.name} (a thing that {c.function})" for c in known)
+            + "; ".join(
+                f"{c.name} (a new kind of stuff)"
+                if c.function == "material"  # S2.2: made to make other things from
+                else f"{c.name} (a thing that {c.function})"
+                for c in known
+            )
             + "."
         )
+    if getattr(rules, "culture", 0):  # S2.4: the ideas they share with their people
+        from genesis.culture import ideas
+
+        lines += ideas.prompt_lines(agent, ctx.world)
     owned = sorted({concepts[i["concept"]].name for i in agent.items if i["concept"] in concepts})
     if owned:
         lines.append("You have with you: " + ", ".join(owned) + ".")
@@ -273,7 +282,8 @@ def feelings_about(agent, other, ctx) -> str:
     mine = ctx.groups.get(agent.group_id) if agent.group_id is not None else None
     theirs = ctx.groups.get(other.group_id) if other.group_id is not None else None
     if theirs is not None and mine is theirs:
-        seen += f" {name} is {'your leader' if theirs.leader == other.id else 'in your group'}."
+        lead = theirs.leader == other.id  # type: ignore[union-attr]
+        seen += f" {name} is {'your leader' if lead else 'in your group'}."
     elif theirs is not None:
         lead = "and leads it" if theirs.leader == other.id else ""
         seen += f" {name} belongs to another group, {theirs.name} {lead}".rstrip() + "."

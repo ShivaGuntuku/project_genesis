@@ -51,7 +51,7 @@ def collect_situations(n: int, seed: int = 7, founders: int = 8, max_days: int =
     """Up to n decision prompts from a rules-only run, spread evenly over decision kinds."""
     sim = Simulation.create(seed=seed, founders=founders)
     collector = PromptCollector(sim.config.start_hour)
-    sim.mind = collector
+    sim.mind = collector  # type: ignore[assignment]
     for _ in range(max_days):
         sim.run(24)
         if len(collector.prompts) >= n * 6 or not sim.population.get_alive():
@@ -64,7 +64,7 @@ def collect_situations(n: int, seed: int = 7, founders: int = 8, max_days: int =
     for items in by_kind.values():
         rng.shuffle(items)
 
-    picked = []
+    picked: list = []
     while len(picked) < n and any(by_kind.values()):
         for kind in sorted(by_kind):
             if by_kind[kind] and len(picked) < n:

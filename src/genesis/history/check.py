@@ -14,6 +14,7 @@ from collections import Counter
 from dataclasses import dataclass
 
 from genesis.culture.words import EARTH_OBJECTS, leak_words
+from genesis.persistence.compact import folded_events, folded_messages
 
 CHATTER = ("greet", "reply", "turn", "ask")
 
@@ -55,14 +56,15 @@ def check(path) -> tuple[dict, list[Row]]:
     rows = []
 
     # --- their own minds -------------------------------------------------------------
-    calls = Counter()
+    calls: Counter[str] = Counter()
     if "llm_calls" in tables:
         calls = Counter(
             r[0] for r in conn.execute("SELECT kind FROM llm_calls WHERE outcome = 'ok'")
         )
     total = sum(calls.values())
     msgs = conn.execute("SELECT COUNT(*), SUM(line IS NOT NULL) FROM messages").fetchone()
-    voiced = (msgs[1] or 0) / max(1, msgs[0])
+    folded = sum(folded_messages(conn).values())  # old routine messages, kept as counts
+    voiced = (msgs[1] or 0) / max(1, msgs[0] + folded)
     chatter = sum(calls[k] for k in CHATTER) / max(1, total)
     plans = calls.get("plan", 0)
     per_day = total / days / people
@@ -99,7 +101,7 @@ def check(path) -> tuple[dict, list[Row]]:
         )
 
     # --- invention -----------------------------------------------------------------------
-    ev = Counter(r[0] for r in conn.execute("SELECT type FROM events"))
+    ev = Counter(r[0] for r in conn.execute("SELECT type FROM events")) + folded_events(conn)
     if rules.get("inventions"):
         concepts = []
         if "concepts" in tables:
@@ -228,7 +230,7 @@ def check(path) -> tuple[dict, list[Row]]:
     # --- the LLM at its maximum ------------------------------------------------------------
     if info["llm"]:
         limit = llm.get("max_calls_per_minute", 0)
-        per_minute = Counter()
+        per_minute: Counter[int] = Counter()
         if "llm_calls" in tables:
             per_minute = Counter(
                 r[0][:16] for r in conn.execute("SELECT created_at FROM llm_calls")

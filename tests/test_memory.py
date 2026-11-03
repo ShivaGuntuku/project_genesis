@@ -262,6 +262,25 @@ def test_small_old_memories_fold_into_daily_summaries():
     assert {m.id for m in s.items} == {3, 4, 5}  # important, recent and beliefs stay
 
 
+def test_a_mind_keeps_at_most_its_cap_least_important_and_oldest_go_first():
+    import dataclasses
+
+    rules = dataclasses.replace(World().rules, memory_cap=3, belief_cap=2)
+    s = stream_of(
+        (1, 1 * DAY, 9, "Mira was born", (2,)),  # a big life event: stays however old
+        (2, 2 * DAY, 2, "Kael chatted with Mira", (2,)),
+        (3, 3 * DAY, 2, "Kael chatted with Oren", (5,)),
+        (4, 4 * DAY, 5, "Dax took Kael's water", (4,)),
+        (5, 5 * DAY, 2, "Kael chatted with Dax", (4,)),
+    )
+    for i in range(6, 9):
+        s.add(Memory(i, i * DAY, memory.BELIEF, f"belief {i}", 7))
+    gone = memory.trim(s, rules)
+    assert {m.id for m in gone} == {2, 3, 6}  # the oldest small talk, the oldest belief
+    assert {m.id for m in s.items} == {1, 4, 5, 7, 8}
+    assert memory.trim(s, rules) == []  # already within the cap
+
+
 def test_memories_survive_save_and_load_and_the_dead_are_not_loaded(tmp_path):
     path = tmp_path / "w.sqlite"
     sim = llm_sim(seed=3, founders=6)

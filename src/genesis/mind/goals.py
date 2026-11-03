@@ -10,7 +10,7 @@
 """
 
 from genesis.culture import inventions as inv
-from genesis.culture.materials import SOLVES
+from genesis.culture.tech import SOLVES
 from genesis.history import events as ev
 
 # need -> the rules' plain words for it (an LLM reflection may rewrite them).
@@ -125,7 +125,7 @@ def choose(agent, ctx) -> str | None:
     s = scores(agent, ctx)
     if not s:
         return None
-    best = max(s, key=s.get)  # first of equals, in NEEDS order
+    best = max(s, key=lambda k: s[k])  # first of equals, in NEEDS order
     return best if s[best] >= ctx.world.rules.goal_min_drive else None
 
 
